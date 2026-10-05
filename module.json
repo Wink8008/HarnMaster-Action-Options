@@ -1,0 +1,18 @@
+{
+  "id": "harnmaster-action-options",
+  "title": "HarnMaster Action Options",
+  "description": "Action Option management for HarnMaster combat in Foundry Virtual Tabletop.",
+  "version": "0.1.0",
+  "compatibility": {
+    "minimum": "14",
+    "verified": "14.366"
+  },
+  "authors": [
+    {
+      "name": "Joseph Wilkinson"
+    }
+  ],
+  "esmodules": [
+    "scripts/action-options.js"
+  ]
+}
