@@ -12,6 +12,9 @@
       "name": "Joseph Wilkinson"
     }
   ],
+  "url": "https://github.com/Wink8008/HarnMaster-Action-Options",
+  "manifest": "https://raw.githubusercontent.com/Wink8008/HarnMaster-Action-Options/master/module.json",
+  "download": "https://github.com/Wink8008/HarnMaster-Action-Options/releases/download/0.1.0/harnmaster-action-options.zip",
   "esmodules": [
     "scripts/action-options.js"
   ]

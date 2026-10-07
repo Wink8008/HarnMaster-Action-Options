@@ -1,13 +1,8 @@
 {
   "name": "harnmaster-action-options",
-  "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
-  "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
-  },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "type": "commonjs"
+  "version": "0.1.0",
+  "description": "Action Option management for HarnMaster combat in Foundry Virtual Tabletop.",
+  "author": "Joseph Wilkinson",
+  "license": "MIT",
+  "type": "module"
 }
