@@ -483,7 +483,6 @@ let DiceHM3 = null;
 let chooseActionOptionsSetupPromise = null;
 
 /* Token UUID of the character whose turn was processed most recently. */
-let previousActionOptionTurnTokenUuid = null;
 
 
 /* ============================================================
@@ -2792,8 +2791,10 @@ async function updateRevealedActionOptionTokenPosition(
  *
  * This is deliberately GM-only.
  *
- * The Action Option is revealed in the chat message regardless
- * of whether the Initiative EML test succeeds or fails.
+ * The selected Action Option is revealed after a successful Initiative
+ * EML test and remains visible for the rest of the combat round.
+ * All revealed Action Option graphics are cleared together when the
+ * Choose Action Options combatant begins the next round.
  *
  * This function does NOT prevent the character from acting.
  */
@@ -2821,7 +2822,6 @@ async function processActionOptionTurn(
         } catch (error) {
             console.error(`${MODULE_ID} | Could not clear Action Option markers at the beginning of the round`, error);
         }
-        previousActionOptionTurnTokenUuid = null;
         return;
     }
 
@@ -2829,25 +2829,11 @@ async function processActionOptionTurn(
     if (processedCombatTurns.has(turnKey)) return;
     processedCombatTurns.add(turnKey);
 
-    /* Remove the previous character's revealed Action Option marker. */
-    if (previousActionOptionTurnTokenUuid && previousActionOptionTurnTokenUuid !== tokenDocument?.uuid && canvas?.scene) {
-        try {
-            await removeRevealedActionOptionToken(previousActionOptionTurnTokenUuid, canvas.scene);
-        } catch (error) {
-            console.error(`${MODULE_ID} | Could not remove previous revealed Action Option token`, error);
-        }
-    }
-
-    /* Never reveal the current Action Option until Initiative succeeds. */
-    if (tokenDocument && canvas?.scene) {
-        try {
-            await removeRevealedActionOptionToken(tokenDocument.uuid, canvas.scene);
-        } catch (error) {
-            console.error(`${MODULE_ID} | Could not clear current revealed Action Option token before Initiative test`, error);
-        }
-    }
-
-    previousActionOptionTurnTokenUuid = tokenDocument?.uuid ?? null;
+    /*
+     * Revealed Action Option graphics persist for the entire combat round.
+     * They are cleared only when the Choose Action Options combatant takes
+     * its turn at the beginning of the next round.
+     */
 
     const initiativeItem = actor.items?.find(item =>
         item.type === "skill" && item.name?.trim().toLowerCase() === "initiative"
@@ -3044,7 +3030,6 @@ async function cleanupCombatMarkers(combat) {
 
     hiddenActionSelections.clear();
     clearMissedInitiativeTracking();
-    previousActionOptionTurnTokenUuid = null;
 
     for (const key of [...processedCombatTurns]) {
         if (key.startsWith(`${combat?.id}:`)) {
