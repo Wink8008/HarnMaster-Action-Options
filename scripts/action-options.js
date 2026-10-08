@@ -1,4 +1,38 @@
 const MODULE_ID = "harnmaster-action-options";
+
+/*
+ * HarnMaster creates automatic Initiative roll ChatMessages at the
+ * beginning of combat rounds. Those messages are marked by the Core
+ * initiativeRoll flag but have no associated user.
+ *
+ * Do NOT suppress Initiative rolls globally: a player or GM can still
+ * make an Initiative roll manually, and those messages have an
+ * associated user and should remain visible in chat.
+ */
+Hooks.on("preCreateChatMessage", (message, data) => {
+    const initiativeRoll = Boolean(
+        data?.flags?.core?.initiativeRoll
+    );
+
+    const automaticSystemRoll =
+        initiativeRoll &&
+        !message?.user;
+
+    if (!automaticSystemRoll) {
+        return;
+    }
+
+    console.debug(
+        `${MODULE_ID} | Suppressed automatic HarnMaster Initiative chat message`,
+        {
+            flavor: data?.flavor ?? null,
+            content: data?.content ?? null,
+            speaker: data?.speaker ?? null
+        }
+    );
+
+    return false;
+});
 const MACRO_NAME = "HarnMaster — Choose Action Option";
 
 const CHOOSE_ACTION_OPTIONS_ACTOR_NAME = "Choose Action Options";
@@ -899,7 +933,7 @@ async function removeAllMissedInitiativeMarkers(
                     )
                 )
         )
-        .map(tile => tile.id) ?? [];
+            .map(tile => tile.id) ?? [];
 
     if (markerIds.length === 0) {
         return 0;
@@ -1156,7 +1190,7 @@ async function removeAllConcealedActionMarkers(
                     )
                 )
         )
-        .map(tile => tile.id) ?? [];
+            .map(tile => tile.id) ?? [];
 
     if (markerIds.length === 0) {
         return 0;
@@ -2292,6 +2326,14 @@ function getAttackOptionGraphicId(adjustmentId) {
         "rider-mighty-strike": "mighty-strike",
         "rider-called-strike": "called-strike",
 
+        "defensive-stance-rest": "defensive-stance",
+        "defensive-stance-pass": "defensive-stance",
+        "defensive-stance-mounted-rest": "defensive-stance",
+        "defensive-stance-mounted-pass": "defensive-stance",
+
+        "ambush-two-weapon-fighting": "two-weapon-fighting",
+        "ambush-called-strike": "called-strike",
+
         "charge-two-weapon-fighting": "two-weapon-fighting",
         "charge-strike-to-stun": "strike-to-stun",
         "charge-all-out-attack": "all-out-attack",
@@ -2399,9 +2441,9 @@ async function removeAllRevealedActionOptionTokens(
                     )
                 )
         )
-        .map(
-            tile => tile.id
-        ) ?? [];
+            .map(
+                tile => tile.id
+            ) ?? [];
 
     if (tokenIds.length === 0) {
         return 0;
