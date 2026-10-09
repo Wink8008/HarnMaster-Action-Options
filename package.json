@@ -1,6 +1,6 @@
 {
   "name": "harnmaster-action-options",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Action Option management for HarnMaster combat in Foundry Virtual Tabletop.",
   "author": "Joseph Wilkinson",
   "license": "MIT",
