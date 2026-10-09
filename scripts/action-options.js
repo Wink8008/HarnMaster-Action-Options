@@ -712,6 +712,31 @@ function validateActionSelection(selection) {
         }
     }
 
+    /* Rider Attack: same mutual-exclusion rules as Melee Attack. */
+    if (primary === "rider-attack") {
+        const riderIds = adjustmentIds.filter(id =>
+            ACTION_ADJUSTMENTS.some(
+                a => a.parent === "rider-attack" && a.id === id
+            )
+        );
+
+        const hasTWF = riderIds.includes("rider-two-weapon-fighting");
+
+        if (hasTWF && riderIds.length > 2) {
+            return {
+                valid: false,
+                reason: "Two-Weapon Fighting may be combined with only one other Rider Attack option."
+            };
+        }
+
+        if (!hasTWF && riderIds.length > 1) {
+            return {
+                valid: false,
+                reason: "Only one Rider Attack option may be selected unless Two-Weapon Fighting is also selected."
+            };
+        }
+    }
+
     /* Ambush: Two-Weapon Fighting and Called Strike may be combined. */
     if (primary === "ambush") {
         const allowed = ["ambush-two-weapon-fighting", "ambush-called-strike"];
@@ -2336,7 +2361,14 @@ function getAttackOptionGraphicId(adjustmentId) {
         "charge-two-weapon-fighting": "two-weapon-fighting",
         "charge-strike-to-stun": "strike-to-stun",
         "charge-all-out-attack": "all-out-attack",
-        "charge-mighty-strike": "mighty-strike"
+        "charge-mighty-strike": "mighty-strike",
+
+        // Mounted Charge reuses the existing Attack Option graphics.
+        "mounted-charge-two-weapon-fighting": "two-weapon-fighting",
+        "mounted-shield-bash": "shield-bash",
+        "mounted-charge-strike-to-stun": "strike-to-stun",
+        "mounted-charge-all-out-attack": "all-out-attack",
+        "mounted-charge-mighty-strike": "mighty-strike"
     };
 
     return aliases[adjustmentId] ?? adjustmentId;
@@ -3405,6 +3437,31 @@ function updateAttackOptions(html, primaryId) {
                 }
             }
 
+
+            /*
+             * Rider Attack: same checkbox selection rules as Melee Attack.
+             * Two-Weapon Fighting can combine with exactly one other option.
+             */
+            if (selectedPrimary === "rider-attack") {
+                const riderOptions = [
+                    ...container.querySelectorAll(".hm-action-attack-option")
+                ].filter(option => option.dataset.adjustmentId);
+
+                const nonTWF = riderOptions.filter(
+                    option =>
+                        option.dataset.adjustmentId !== "rider-two-weapon-fighting"
+                );
+
+                if (id !== "rider-two-weapon-fighting") {
+                    for (const other of nonTWF) {
+                        if (other !== checkbox) {
+                            other.checked = false;
+                        }
+                    }
+                }
+            }
+
+
             /* Charge / Mounted Charge: one Group A and/or one Group B. */
             if (selectedPrimary === "charge" || selectedPrimary === "mounted-charge") {
                 const groupA = selectedPrimary === "charge"
@@ -3627,39 +3684,6 @@ async function ensurePlayerMacro() {
         );
     }
 }
-
-
-/* ============================================================
- * ACTION OPTION TILE HOVER EVENTS
- * ============================================================ */
-
-Hooks.on(
-    "drawTile",
-    tile => {
-        attachActionOptionTooltip(tile);
-    }
-);
-
-
-Hooks.on(
-    "destroyTile",
-    tile => {
-        removeActionOptionTooltipListeners(tile);
-    }
-);
-
-
-Hooks.once(
-    "canvasReady",
-    () => {
-        hideActionOptionTooltip();
-
-        for (const tile of canvas?.tiles?.placeables ?? []) {
-            attachActionOptionTooltip(tile);
-        }
-    }
-);
-
 
 /* ============================================================
  * TOKEN MOVEMENT
