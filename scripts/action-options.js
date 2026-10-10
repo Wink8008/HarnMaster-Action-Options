@@ -935,6 +935,86 @@ function recordMissedInitiativeFailure(tokenUuid) {
     return next;
 }
 
+
+/* ============================================================
+ * MISSED INITIATIVE OVERRIDE
+ * ============================================================
+ *
+ * Allows a GM macro to override the consecutive failed Initiative
+ * count while keeping the scene marker and Initiative bonus synced.
+ *
+ * Failure counts:
+ *   0 = Cleared
+ *   1 = Failed Last INI (+0)
+ *   2 = INI +10
+ *   3 = INI +20
+ *   4 = INI +30
+ *   5 = INI +40
+ *   6 = INI +50
+ *   7 = INI +60
+ *   8 = INI +70
+ */
+async function overrideMissedInitiative(
+    tokenDocument,
+    failureCount,
+    scene = canvas?.scene
+) {
+    if (!game?.user?.isGM) {
+        throw new Error("Only the GM can override Missed Initiative.");
+    }
+
+    // Accept either a TokenDocument or a Token placeable.
+    const document = tokenDocument?.document ?? tokenDocument;
+
+    if (!document?.uuid) {
+        throw new Error("A valid character token is required.");
+    }
+
+    const count = Number(failureCount);
+
+    if (!Number.isInteger(count) || count < 0 || count > 8) {
+        throw new Error("The failure count must be an integer from 0 to 8.");
+    }
+
+    scene = document.parent ?? scene;
+
+    if (!scene) {
+        throw new Error("No active Scene is available.");
+    }
+
+    const tokenUuid = document.uuid;
+
+    // Clearing the override removes both the runtime bonus and marker.
+    if (count === 0) {
+        missedInitiativeStates.delete(tokenUuid);
+
+        await removeMissedInitiativeMarker(tokenUuid, scene);
+
+        return {
+            failureCount: 0,
+            bonus: 0,
+            cleared: true
+        };
+    }
+
+    // Update the same Map used by Initiative turn processing.
+    missedInitiativeStates.set(tokenUuid, count);
+
+    // Create or update the matching scene graphic.
+    await createOrUpdateMissedInitiativeMarker(
+        document,
+        count,
+        scene
+    );
+
+    return {
+        failureCount: count,
+        bonus: getMissedInitiativeBonus(count),
+        cleared: false
+    };
+}
+
+
 function resetMissedInitiativeFailure(tokenUuid) {
     missedInitiativeStates.delete(tokenUuid);
 }
@@ -3951,6 +4031,7 @@ Hooks.once(
             getMissedInitiativeBonus,
             createOrUpdateMissedInitiativeMarker,
             removeMissedInitiativeMarker,
+            overrideMissedInitiative,
             updateMissedInitiativeMarkerPosition,
             clearMissedInitiativeTracking,
 
