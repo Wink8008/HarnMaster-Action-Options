@@ -294,8 +294,39 @@ function moveActionOptionTooltip(clientX, clientY) {
     tooltip.style.top = `${Math.max(margin, top)}px`;
 }
 
+function getMarkerCharacterName(tokenUuid, storedName = null) {
+    if (storedName && String(storedName).trim()) {
+        return String(storedName).trim();
+    }
+
+    const canvasToken = canvas?.tokens?.placeables?.find(
+        token => token?.document?.uuid === tokenUuid
+    );
+    const tokenDocument = canvasToken?.document;
+
+    return (
+        tokenDocument?.name ??
+        tokenDocument?.actor?.name ??
+        canvasToken?.name ??
+        "Unknown Character"
+    );
+}
+
+function getMarkerDisplayName(status, characterName) {
+    return `Token: ${status} (${characterName})`;
+}
+
 function getActionOptionTooltipText(tile) {
     const document = tile?.document ?? tile;
+
+    // Prefer an explicitly saved tooltip from the Tile configuration sheet.
+    const savedTooltip = document?.getFlag?.(
+        MODULE_ID,
+        "tooltipText"
+    );
+    if (typeof savedTooltip === "string" && savedTooltip.trim()) {
+        return savedTooltip.trim();
+    }
 
     const revealed = document?.getFlag?.(
         MODULE_ID,
@@ -304,13 +335,18 @@ function getActionOptionTooltipText(tile) {
 
     if (revealed) {
         const actionOptionId = revealed.actionOptionId;
-        if (actionOptionId) {
-            return (
+        const characterName = getMarkerCharacterName(
+            revealed.tokenUuid,
+            revealed.characterName
+        );
+        const optionName = actionOptionId
+            ? (
                 getActionOption(actionOptionId)?.name ??
                 getActionAdjustment(actionOptionId)?.name ??
                 actionOptionId
-            );
-        }
+            )
+            : "Action Option";
+        return `${characterName}: ${optionName}`;
     }
 
     const concealed = document?.getFlag?.(
@@ -318,7 +354,13 @@ function getActionOptionTooltipText(tile) {
         CONCEALED_MARKER_FLAG
     );
 
-    if (concealed) return "Action Option";
+    if (concealed) {
+        const characterName = getMarkerCharacterName(
+            concealed.tokenUuid,
+            concealed.characterName
+        );
+        return `${characterName}: Action Option`;
+    }
 
     const missed = document?.getFlag?.(
         MODULE_ID,
@@ -326,14 +368,18 @@ function getActionOptionTooltipText(tile) {
     );
 
     if (missed) {
+        const characterName = getMarkerCharacterName(
+            missed.tokenUuid,
+            missed.characterName
+        );
         const failures = Math.max(
             0,
             Number(missed.consecutiveFailures) || 0
         );
-
-        if (failures <= 1) return "Missed Initiative";
-
-        return `Missed Initiative (+${getMissedInitiativeBonus(failures)})`;
+        const status = failures <= 1
+            ? "Missed Initiative"
+            : `Missed Initiative (+${getMissedInitiativeBonus(failures)})`;
+        return `${characterName}: ${status}`;
     }
 
     return null;
@@ -446,6 +492,73 @@ Hooks.on(
         hideActionOptionTooltip();
     }
 );
+
+/*
+ * Expose the same hover-tooltip text in the Scene Tile configuration
+ * sheet. The value is stored on the Tile as a module flag, so custom
+ * text survives reloads and is also used by the on-canvas tooltip.
+ */
+const ACTION_OPTION_TOOLTIP_SHEET_FIELD_ID =
+    "harnmaster-action-options-tooltip-sheet-field";
+
+Hooks.on("renderTileConfig", (app, html) => {
+    const root = html instanceof HTMLElement ? html : html?.[0];
+    const tileDocument = app?.document;
+    if (!root || !tileDocument || root.querySelector(`#${ACTION_OPTION_TOOLTIP_SHEET_FIELD_ID}`)) {
+        return;
+    }
+
+    const form = root.querySelector("form") ?? root.querySelector(".window-content") ?? root;
+    const fieldset = document.createElement("fieldset");
+    fieldset.id = ACTION_OPTION_TOOLTIP_SHEET_FIELD_ID;
+    fieldset.className = "harnmaster-action-options-tooltip-config";
+    fieldset.style.marginTop = "0.75rem";
+
+    const legend = document.createElement("legend");
+    legend.textContent = "HarnMaster Action Option Tooltip";
+    fieldset.appendChild(legend);
+
+    const label = document.createElement("label");
+    label.textContent = "Tooltip text";
+    label.style.display = "block";
+    label.style.marginBottom = "0.25rem";
+    fieldset.appendChild(label);
+
+    const input = document.createElement("textarea");
+    input.rows = 2;
+    input.style.width = "100%";
+    input.style.resize = "vertical";
+    input.value = getActionOptionTooltipText(tileDocument) ?? "";
+    input.setAttribute("aria-label", "Tooltip text");
+    label.appendChild(input);
+
+    const help = document.createElement("p");
+    help.className = "hint";
+    help.textContent = "This text appears when hovering over the marker on the scene.";
+    fieldset.appendChild(help);
+
+    const button = document.createElement("button");
+    button.type = "button";
+    button.innerHTML = '<i class="fas fa-save"></i> Save Tooltip';
+    button.style.width = "100%";
+    button.addEventListener("click", async () => {
+        button.disabled = true;
+        try {
+            await tileDocument.update({
+                [`flags.${MODULE_ID}.tooltipText`]: input.value.trim()
+            });
+            ui.notifications?.info?.("Action Option tooltip saved.");
+        } catch (error) {
+            console.error(`${MODULE_ID} | Failed to save marker tooltip.`, error);
+            ui.notifications?.error?.("Unable to save the Action Option tooltip. See the console for details.");
+        } finally {
+            button.disabled = false;
+        }
+    });
+    fieldset.appendChild(button);
+
+    form.appendChild(fieldset);
+});
 
 
 /* Missed Initiative marker artwork and runtime streak tracking. */
@@ -872,9 +985,17 @@ async function createOrUpdateMissedInitiativeMarker(tokenDocument, failureCount,
     const position = getMissedInitiativeMarkerPosition(tokenDocument);
     const image = getMissedInitiativeImage(failureCount);
     const bonus = getMissedInitiativeBonus(failureCount);
+    const characterName = getMarkerCharacterName(
+        tokenDocument.uuid,
+        tokenDocument.actor?.name ?? tokenDocument.name
+    );
+    const statusName = failureCount <= 1
+        ? "Failed last ini"
+        : `Missed Initiative (+${bonus})`;
     const existing = getStoredMissedInitiativeMarker(tokenDocument.uuid, scene);
 
     const tileData = {
+        name: getMarkerDisplayName(statusName, characterName),
         x: position.x,
         y: position.y,
         width: position.width,
@@ -886,6 +1007,7 @@ async function createOrUpdateMissedInitiativeMarker(tokenDocument, failureCount,
             [MODULE_ID]: {
                 [MISSED_INITIATIVE_MARKER_FLAG]: {
                     tokenUuid: tokenDocument.uuid,
+                    characterName,
                     sceneId: scene.id,
                     consecutiveFailures: failureCount,
                     bonus,
@@ -934,7 +1056,6 @@ function recordMissedInitiativeFailure(tokenUuid) {
     missedInitiativeStates.set(tokenUuid, next);
     return next;
 }
-
 
 /* ============================================================
  * MISSED INITIATIVE OVERRIDE
@@ -1013,7 +1134,6 @@ async function overrideMissedInitiative(
         cleared: false
     };
 }
-
 
 function resetMissedInitiativeFailure(tokenUuid) {
     missedInitiativeStates.delete(tokenUuid);
@@ -1186,8 +1306,14 @@ async function createOrUpdateConcealedActionMarker(
             tokenDocument.uuid,
             scene
         );
+    const characterName = getMarkerCharacterName(
+        tokenDocument.uuid,
+        tokenDocument.actor?.name ?? tokenDocument.name
+    );
 
     const tileData = {
+
+        name: getMarkerDisplayName("Action Option", characterName),
 
         x: position.x,
 
@@ -1216,6 +1342,8 @@ async function createOrUpdateConcealedActionMarker(
                 [CONCEALED_MARKER_FLAG]: {
                     tokenUuid:
                         tokenDocument.uuid,
+
+                    characterName,
 
                     sceneId:
                         scene.id,
@@ -1806,18 +1934,12 @@ function submitActionOptionSelection({
 
             }
 
+
             else {
 
                 /*
-                 * Player sends the request to the GM.
-                 */
-                game.socket.emit(
-                    SOCKET_NAME,
-                    request
-                );
-
-                /*
-                 * Listen for the GM's response.
+                 * Register the response listener BEFORE sending
+                 * the request so the response cannot arrive first.
                  */
                 game.socket.on(
                     SOCKET_NAME,
@@ -1850,7 +1972,16 @@ function submitActionOptionSelection({
                     },
                     10000
                 );
+
+                /*
+                 * Send the request after the listener is ready.
+                 */
+                game.socket.emit(
+                    SOCKET_NAME,
+                    request
+                );
             }
+
         }
     );
 }
@@ -2678,6 +2809,10 @@ async function createRevealedActionOptionToken(
         getConcealedMarkerPosition(
             tokenDocument
         );
+    const characterName = getMarkerCharacterName(
+        tokenDocument.uuid,
+        tokenDocument.actor?.name ?? tokenDocument.name
+    );
 
     /*
      * Place the entire row directly above the actor and center it
@@ -2732,6 +2867,13 @@ async function createRevealedActionOptionToken(
 
     const tileData = graphics.map(
         (graphic, index) => ({
+            name: getMarkerDisplayName(
+                getActionOption(graphic.graphicId)?.name ??
+                getActionAdjustment(graphic.sourceId)?.name ??
+                graphic.graphicId,
+                characterName
+            ),
+
             x:
                 rowStartX +
                 (step * index),
@@ -2759,6 +2901,8 @@ async function createRevealedActionOptionToken(
                     [REVEALED_ACTION_OPTION_FLAG]: {
                         tokenUuid:
                             tokenDocument.uuid,
+
+                        characterName,
 
                         sceneId:
                             scene.id,
@@ -3516,7 +3660,6 @@ function updateAttackOptions(html, primaryId) {
                     }
                 }
             }
-
 
             /*
              * Rider Attack: same checkbox selection rules as Melee Attack.
