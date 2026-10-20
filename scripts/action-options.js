@@ -43,6 +43,7 @@ const NORMAL_ACTION_OPTIONS = [
     { id: "rest", name: "Rest", category: "primary" },
     { id: "pass", name: "Pass", category: "primary" },
     { id: "free-move", name: "Free Move", category: "primary" },
+    { id: "walk", name: "Walk", category: "primary" },
     { id: "engage", name: "Engage", category: "primary" },
     { id: "stealth-move", name: "Stealth Move", category: "primary" },
     { id: "ambush", name: "Ambush", category: "primary" },
@@ -56,7 +57,8 @@ const NORMAL_ACTION_OPTIONS = [
     { id: "aim-missile", name: "Aim Missile", category: "attack" },
     { id: "called-shot", name: "Called Shot", category: "attack" },
     { id: "grapple-attack", name: "Grapple Attack", category: "primary" },
-    { id: "esoteric-attack", name: "Esoteric Attack", category: "primary" }
+    { id: "esoteric-attack", name: "Esoteric Attack", category: "primary" },
+    { id: "prepare-for-initiative", name: "Prepare for Initiative", category: "primary" }
 ];
 
 const MOUNTED_ACTION_OPTIONS = [
@@ -64,6 +66,7 @@ const MOUNTED_ACTION_OPTIONS = [
     { id: "mounted-pass", name: "Mounted Pass", category: "primary" },
     { id: "mount-dismount", name: "Mount/Dismount", category: "primary" },
     { id: "mounted-move", name: "Mounted Move", category: "primary" },
+    { id: "mounted-walk", name: "Mounted Walk", category: "primary" },
     { id: "mounted-engage", name: "Mounted Engage", category: "primary" },
     { id: "mounted-charge", name: "Mounted Charge", category: "primary" },
     { id: "mounted-disengage", name: "Mounted Disengage", category: "primary" },
@@ -119,6 +122,7 @@ const ACTION_OPTION_DESCRIPTIONS = {
     "rest": `This option is available only to unengaged characters. The character does nothing except possibly sit or lie down. Resting characters may (within reason) attend to wounds, do minor weapon repairs, etc., and may defend normally if attacked later in the combat round.`,
     "pass": `This option is available to engaged characters who wish to forfeit their Turn. Characters taking this option may defend normally if attacked.`,
     "free-move": `Only unengaged characters may use this option. A Free Move is made at any speed up to Double Move. A character performing a Free Move may not enter an enemy Engagement Zone and must stop upon entering an enemy Reaction Zone for the first time. If the Free Move character started his move in an enemy Reaction Zone then he may move freely but still may not engage the enemy. In the course of a Free Move, characters may (within reason) change weapons, open/close doors, pick things up, etc.`,
+    "walk": `Only unengaged characters may use this option. A Walk is made at Half Move speed only. A character performing a Walk may not enter an enemy Engagement Zone and must stop upon entering an enemy Reaction Zone for the first time. If the character performing a Walk started his move in an enemy Reaction Zone then he may move freely but still may not engage the enemy. In the course of a Walk, characters may (within reason) change weapons, open/close doors, pick things up, etc.`,
     "engage": `An unengaged character makes a Half-Move (or less) to enter an enemy’s Engagement Zone, where he stops. Reaction Zones are irrelevant and ignored when taking an Engage Action Option. Upon completion of the move, Engage Initiative is performed for each of the newly engaged parties where they each test Initiative. If the Defender gains a higher success level, a Tactical Advantage is earned and the Attacking character’s move is finished. The defender’s Tactical Advantage can be used to Attack first, Disengage, etc. After the defender performs his Tactical Advantage then the attacker may optionally perform a Melee Attack if within range or if not his turn is finished. If the defender did not gain a Tactical Advantage then the attacker may continue his move if necessary in order to get close enough and then perform a Melee Attack.`,
     "charge": `An unengaged character makes a Full-Move (or less) to engage an enemy character and must (not optional) then conduct a Melee Attack. A Charge cannot be performed if a character starts in an enemy’s Reaction Zone. The Charge Action Option allows a combatant to ignore an enemy’s Reaction Zone and the defender only gets to use Engage Initiative if he has a long weapon reach (greater than 1 hex). Upon completion of the defender’s Tactical Advantage or if he did not gain one then the Charging character completes his move and performs his Melee Attack.`,
     "disengage": `An engaged character may disengage from melee combat. Each engaged combatant makes an Initiative test. Any enemies who score better than the disengaging character may take a Tactical Advantage. After all Tactical Advantages have been resolved the disengaging character may move one (1) hex and then, if now unengaged, makes a Half-Move. This move terminates if another enemy Reaction Zone is entered. The disengaging character may not enter another enemy’s Engagement Zone.`,
@@ -131,10 +135,12 @@ const ACTION_OPTION_DESCRIPTIONS = {
     "reload": `All Missile weapons must be ‘readied’ before throwing or firing. This is done with a Reloading Action Option. The Reload Action Option is a special form of Grope and the GM can require a test to determine success depending on circumstances. All missile weapons except crossbow maybe be reloaded in 1 round (ie: shoot 1 round and reload the next). The rounds required to reload a crossbow depends on the STR of the crossbow compared to the STR of the wielding character as below: • Crossbow STR is <= Character STR: Character can reload the crossbow in 1 combat round and shoot the next. This STR Crossbow can be reloaded while mounted but with +1 round to reload (for a total of 2 rounds). • Crossbow STR is 1 or 2 greater than Character STR: Character must spend 2 rounds reloading the crossbow and may shoot every 3rd round. This STR Crossbow cannot be reloaded while mounted. • Crossbow STR is >= 3 more than Character STR: Character must use a mechanical device called a goats’ foot to reload the crossbow. The crossbow cannot be reloaded without this device. The time to reload is 3 rounds. The crossbow may be fired every 4th round. This STR crossbow cannot be reloaded while mounted.`,
     "grapple-attack": `Any attempt to grapple, hold, or wrestle with one engaged opponent using Unarmed Combat as a skill. The Attacker may (if possible) move one hex before attempting a Grapple. The Defender may counter with any Defense (including Grapple). If the grappler achieves any “Strike” result, a hold on the opponent has been gained. Each character then rolls 3d6 + Strength - Physical Penalty. The character with the highest total (re-roll ties) is assumed to have thrown the other to the ground and wins a Tactical Advantage.`,
     "esoteric-attack": `This option is available to characters capable of using magic or psionics, or to those who wish to call for divine intervention. An esoteric attack may not (at GM discretion) be available to engaged characters. If an esoteric attack takes more than 10 seconds to prepare, it must be readied over several turns. Note: The use of magic, psionics, or divine aid in combat/crisis situations is always governed by GM discretion.`,
+    "prepare-for-initiative": `Spend this turn preparing for the next round’s Initiative test. If selected, this option grants +10 to the character’s Initiative EML at the beginning of the next round.`,
     "mounted-rest": `This option is available only to unengaged riders. The rider does nothing except possibly sit or remain quietly mounted. Mounted riders may (within reason) attend to wounds, do minor weapon repairs, etc., and may defend normally if attacked later in the combat round.`,
     "mounted-pass": `This option is available to all characters who wish to forfeit their Turn. If unengaged, this option may include a GROPE (COMBAT 7). Riders may defend normally if attacked.`,
     "mount-dismount": `Mount or dismount in combat. With CS, the rider gains a tactical advantage. Any failure requires an UNHORSING roll.`,
     "mounted-move": `Only unengaged riders may use this option. A Mounted Move is made at any of the four speeds, but may NOT enter an enemy’s Engagement Zone and must stop upon entering an enemy Reaction Zone for the first time. If the rider started his move in an enemy Reaction Zone then he may move freely but still may not engage the enemy. In the course of a Mounted Move, riders may (within reason) change weapons, open/close doors, pick things up, etc. This option may also include a Grope or Missile Attack (COMBAT 15).`,
+    "mounted-walk": `Only unengaged riders may use this option. A Mounted Walk is made at Half Move speed only. A rider performing a Mounted Walk may not enter an enemy Engagement Zone and must stop upon entering an enemy Reaction Zone for the first time. If the rider started his move in an enemy Reaction Zone then he may move freely but still may not engage the enemy. In the course of a Mounted Walk, riders may (within reason) change weapons, open/close doors, pick things up, etc.`,
     "mounted-engage": `An unengaged rider makes a WALK or TROT move to enter an enemy’s Engagement Zone, where he stops. Reaction Zones are irrelevant and ignored when taking an Engage Action Option. Upon completion of the move, Engage Initiative is performed for each of the newly engaged parties where they each test Initiative. If the Defender gains a higher success level, a Tactical Advantage is earned and the Attacking rider’s move is finished. The defender’s Tactical Advantage can be used to Attack first, Disengage, etc. After the defender performs his Tactical Advantage then the rider may optionally perform a Rider Attack or Steed Trample if within range or if not his turn is finished. If the defender did not gain a Tactical Advantage then the rider may continue his move if necessary in order to get close enough and then perform a Rider Attack or Steed Trample.`,
     "mounted-charge": `An unengaged rider makes a CANTER or GALLOP move to engage an enemy afoot or mounted. The charge distance cannot be less than one half the maximum CANTER (or GALLOP) move, and must follow a straight path to engage. A Galloping charge requires a steed stumble roll. A Mounted Charge cannot be performed if the rider starts in an enemy’s Reaction Zone. The Mounted Charge Action Option allows a rider to ignore an enemy’s Reaction Zone and the defender only gets to use Engage Initiative if he has a long weapon reach (greater than 1 hex). Upon completion of the defender’s Tactical Advantage or if he did not gain one then the Charging rider completes his move and performs the required Mounted Charge attack actions below. The steed must halt when it enters an Engagement Zone, and a mandatory Steed Trample at +20 is executed against any enemy afoot in the path of the steed. The Rider may (optional) also conduct a Rider Attack (see below). Trample and weapon impacts (for both sides) are +1d6 (Canter) and 2d6 Gallop). That is, an AX2 strike becomes Ax3 on a Canter charge and Ax4 on a Gallop. Regardless of the outcome, the steed must advance one (1) hex to displace the opponent being trampled (if any). A tactical advantage must be gained from the steed trample to continue moving. Otherwise, the steed halts, which could leave the rider and steed in the middle of a somewhat hostile crowd.`,
     "mounted-disengage": `An engaged rider may disengage from melee combat. Each engaged combatant makes an Initiative test. Any enemies who score better than the disengaging rider may take a Tactical Advantage. After all Tactical Advantages have been resolved the disengaging rider may wheel (turn in place), move the steed one or two hexes, and then, if now unengaged, make a WALK or TROT move. This move terminates if another enemy Reaction Zone is entered. The disengaging rider may not enter another enemy’s Engagement Zone.`,
@@ -575,6 +581,109 @@ const missedInitiativeStates = new Map();
  */
 const hiddenActionSelections = new Map();
 
+/* Pending Prepare for Initiative bonuses, keyed by combat/token/round. */
+const prepareForInitiativeBonuses = new Map();
+const PREPARE_FOR_INITIATIVE_BONUS = 10;
+
+function getPrepareForInitiativeBonusKey(combatId, tokenUuid, round) {
+    return `${combatId}:${tokenUuid}:${round}`;
+}
+
+function clearPrepareForInitiativeBonusForRound(combatId, tokenUuid, round) {
+    return prepareForInitiativeBonuses.delete(
+        getPrepareForInitiativeBonusKey(combatId, tokenUuid, round)
+    );
+}
+
+/*
+ * Persist ONLY pending numeric Initiative bonuses in a GM-owned JournalEntry.
+ * Concealed Action Option selections are never written to this store.
+ * The entry has default permission NONE, so player clients cannot read it.
+ */
+const PREPARE_INITIATIVE_STORE_FLAG = "prepareInitiativeBonusStore";
+const PREPARE_INITIATIVE_STORE_NAME = "Action Options Runtime Data";
+let prepareInitiativeStorePromise = null;
+let prepareInitiativePersistenceQueue = Promise.resolve();
+
+async function getPrepareInitiativeStore(createIfMissing = false) {
+    if (!game.user?.isGM) return null;
+    if (prepareInitiativeStorePromise) {
+        const existing = await prepareInitiativeStorePromise;
+        if (existing || !createIfMissing) return existing;
+        prepareInitiativeStorePromise = null;
+    }
+
+    prepareInitiativeStorePromise = (async () => {
+        let entry = game.journal?.find(journal =>
+            journal.getFlag(MODULE_ID, PREPARE_INITIATIVE_STORE_FLAG) === true
+        );
+        if (!entry && createIfMissing) {
+            entry = await JournalEntry.create({
+                name: PREPARE_INITIATIVE_STORE_NAME,
+                content: "<p>Internal Action Options runtime data. Do not share this entry with players.</p>",
+                ownership: { default: CONST.DOCUMENT_OWNERSHIP_LEVELS.NONE },
+                flags: { [MODULE_ID]: { [PREPARE_INITIATIVE_STORE_FLAG]: true } }
+            });
+        }
+        return entry ?? null;
+    })();
+
+    try {
+        return await prepareInitiativeStorePromise;
+    } catch (error) {
+        prepareInitiativeStorePromise = null;
+        console.error(`${MODULE_ID} | Could not access GM-only Initiative bonus storage`, error);
+        return null;
+    }
+}
+
+async function loadPrepareForInitiativeBonuses() {
+    if (!game.user?.isGM) return;
+    const store = await getPrepareInitiativeStore(false);
+    if (!store) return;
+    try {
+        const raw = store.getFlag(MODULE_ID, "pendingBonuses");
+        if (!Array.isArray(raw)) return;
+        prepareForInitiativeBonuses.clear();
+        for (const entry of raw) {
+            if (!entry || typeof entry.combatId !== "string" ||
+                typeof entry.tokenUuid !== "string" ||
+                !Number.isFinite(Number(entry.targetRound)) ||
+                !Number.isFinite(Number(entry.bonus))) continue;
+            const normalized = {
+                combatId: entry.combatId,
+                tokenUuid: entry.tokenUuid,
+                targetRound: Number(entry.targetRound),
+                bonus: Number(entry.bonus),
+                selectedInRound: Number(entry.selectedInRound) || 0
+            };
+            prepareForInitiativeBonuses.set(
+                getPrepareForInitiativeBonusKey(normalized.combatId, normalized.tokenUuid, normalized.targetRound),
+                normalized
+            );
+        }
+    } catch (error) {
+        console.error(`${MODULE_ID} | Could not load pending Initiative bonuses`, error);
+    }
+}
+
+function persistPrepareForInitiativeBonuses() {
+    if (!game.user?.isGM) return Promise.resolve();
+    const snapshot = [...prepareForInitiativeBonuses.values()].map(entry => ({ ...entry }));
+    prepareInitiativePersistenceQueue = prepareInitiativePersistenceQueue
+        .catch(() => { })
+        .then(async () => {
+            const store = await getPrepareInitiativeStore(snapshot.length > 0);
+            if (!store) return;
+            await store.setFlag(MODULE_ID, "pendingBonuses", snapshot);
+        })
+        .catch(error => {
+            console.error(`${MODULE_ID} | Could not persist pending Initiative bonuses`, error);
+        });
+    return prepareInitiativePersistenceQueue;
+}
+
+
 /*
  * Tracks combat turns which have already had their Initiative test
  * processed during the current Foundry session.
@@ -709,6 +818,11 @@ function areActionOptionsCompatible(optionIds) {
 
     if (ids.length === 0) return true;
 
+    /* Prepare for Initiative cannot be combined with any other Action Option. */
+    if (ids.includes("prepare-for-initiative") && ids.length > 1) {
+        return false;
+    }
+
     const primaryIds = ids.filter(
         id => getActionOption(id)?.category === "primary"
     );
@@ -771,6 +885,15 @@ function validateActionSelection(selection) {
 
     const optionIds = Array.isArray(selection.options) ? selection.options : [];
     const adjustmentIds = Array.isArray(selection.adjustments) ? selection.adjustments : [];
+
+    /* Prepare for Initiative is exclusive with every other option, including Attack Options. */
+    if (optionIds.includes("prepare-for-initiative") &&
+        (new Set(optionIds).size !== 1 || adjustmentIds.length > 0)) {
+        return {
+            valid: false,
+            reason: "Prepare for Initiative is mutually exclusive with all other Action Options and Attack Options."
+        };
+    }
 
     if (optionIds.length === 0) {
         return { valid: false, reason: "You must select an Action Option." };
@@ -1633,27 +1756,80 @@ function handleActionOptionSocket(
                         );
 
                         /*
-                         * Create/update the concealed marker.
+                         * Prepare for Initiative applies to the next round only.
+                         * Changing to another option cancels the pending bonus
+                         * created by this round's selection, but leaves a bonus
+                         * already due this round untouched.
+                         */
+                        const activeCombat = game.combat;
+                        const selectedTokenUuid = data.tokenUuid ?? null;
+                        if (activeCombat?.started && selectedTokenUuid) {
+                            const currentRound = Number(activeCombat.round ?? 0);
+                            const nextRound = currentRound + 1;
+                            const nextRoundKey = getPrepareForInitiativeBonusKey(
+                                activeCombat.id, selectedTokenUuid, nextRound
+                            );
+                            if (selection.options.includes("prepare-for-initiative")) {
+                                prepareForInitiativeBonuses.set(nextRoundKey, {
+                                    combatId: activeCombat.id,
+                                    tokenUuid: selectedTokenUuid,
+                                    targetRound: nextRound,
+                                    bonus: PREPARE_FOR_INITIATIVE_BONUS,
+                                    selectedInRound: currentRound
+                                });
+                            } else {
+                                prepareForInitiativeBonuses.delete(nextRoundKey);
+                            }
+                            void persistPrepareForInitiativeBonuses();
+                        }
+
+                        /*
+                         * The Action Option is normally selected during the
+                         * special Choose Action Options turn. In that case it
+                         * remains concealed behind a question mark until the
+                         * character's Initiative test is processed.
+                         *
+                         * If the character chooses an option on their OWN turn
+                         * (for example, after failing Initiative and choosing
+                         * Prepare for Initiative), reveal the selected graphics
+                         * immediately instead. This does not trigger another
+                         * Initiative test; it only changes the marker display.
                          */
                         if (
                             data.tokenUuid &&
-                            data.sceneId ===
-                            canvas.scene?.id
+                            data.sceneId === canvas.scene?.id
                         ) {
-
-                            const tokenDocument =
-                                await fromUuid(
-                                    data.tokenUuid
+                            const tokenDocument = await fromUuid(data.tokenUuid);
+                            if (tokenDocument) {
+                                const activeCombat = game.combat;
+                                const activeCombatant = activeCombat?.combatant;
+                                const activeTokenUuid = activeCombatant?.token?.uuid ?? null;
+                                const activeActorUuid = activeCombatant?.actor?.uuid ?? null;
+                                const selectingOnOwnTurn = Boolean(
+                                    activeCombat?.started &&
+                                    !isChooseActionOptionsActor(activeCombatant?.actor) &&
+                                    (
+                                        activeTokenUuid === tokenDocument.uuid ||
+                                        (!activeTokenUuid && activeActorUuid === actor.uuid)
+                                    )
                                 );
 
-                            if (
-                                tokenDocument
-                            ) {
-
-                                await createOrUpdateConcealedActionMarker(
-                                    tokenDocument,
-                                    canvas.scene
-                                );
+                                if (selectingOnOwnTurn) {
+                                    await removeConcealedActionMarker(
+                                        tokenDocument.uuid,
+                                        canvas.scene
+                                    );
+                                    await createRevealedActionOptionToken(
+                                        tokenDocument,
+                                        selection,
+                                        canvas.scene
+                                    );
+                                } else {
+                                    await createOrUpdateConcealedActionMarker(
+                                        tokenDocument,
+                                        canvas.scene
+                                    );
+                                }
                             }
                         }
 
@@ -3115,7 +3291,15 @@ async function processActionOptionTurn(
     const tokenUuid = tokenDocument?.uuid ?? `${actor.uuid}:${combatant.id}`;
     const previousFailures = getMissedInitiativeFailureCount(tokenUuid);
     const missedInitiativeBonus = getMissedInitiativeBonus(previousFailures);
-    const initiativeEML = baseInitiativeEML + missedInitiativeBonus;
+    const currentRound = Number(combat.round ?? 0);
+    const prepareBonusKey = getPrepareForInitiativeBonusKey(
+        combat.id, tokenUuid, currentRound
+    );
+    const prepareBonusEntry = prepareForInitiativeBonuses.get(prepareBonusKey);
+    const prepareForInitiativeBonus = prepareBonusEntry?.targetRound === currentRound
+        ? Number(prepareBonusEntry.bonus) || 0
+        : 0;
+    const initiativeEML = baseInitiativeEML + missedInitiativeBonus + prepareForInitiativeBonus;
 
     let result;
     try {
@@ -3133,6 +3317,12 @@ async function processActionOptionTurn(
             content: `<div class="hm-action-turn-result"><h3>${escapeChatHTML(actor.name)}'s Turn</h3><p>Unable to perform the Initiative EML test.</p></div>`
         });
         return;
+    }
+
+    /* Consume the preparation bonus only after the Initiative test completes. */
+    if (prepareForInitiativeBonus > 0) {
+        prepareForInitiativeBonuses.delete(prepareBonusKey);
+        await persistPrepareForInitiativeBonuses();
     }
 
     const success = Boolean(result?.isSuccess);
@@ -3189,9 +3379,10 @@ async function processActionOptionTurn(
         }
     }
 
-    const bonusText = missedInitiativeBonus === 0
-        ? ""
-        : ` <strong>(+${missedInitiativeBonus} Missed Initiative)</strong>`;
+    const bonusText = [
+        missedInitiativeBonus > 0 ? `+${missedInitiativeBonus} Missed Initiative` : null,
+        prepareForInitiativeBonus > 0 ? `+${prepareForInitiativeBonus} Prepare for Initiative` : null
+    ].filter(Boolean).map(label => ` <strong>(${label})</strong>`).join("");
 
     const turnMessage = success
         ? `<div class="hm-action-turn-result"><h3>${escapeChatHTML(actor.name)}'s Turn</h3><p>Due to a quick reaction <strong>${escapeChatHTML(actor.name)}</strong> is able to take an action this round.</p><p><strong>Initiative EML Test:</strong> ${escapeChatHTML(String(initiativeEML))}${bonusText} — Success</p><p><strong>Action Option:</strong> ${escapeChatHTML(actionOptionText)}</p></div>`
@@ -3205,6 +3396,7 @@ async function processActionOptionTurn(
                 actorUuid: actor.uuid,
                 baseInitiativeEML,
                 missedInitiativeBonus,
+                prepareForInitiativeBonus,
                 initiativeEML,
                 initiativeRoll: Number.isFinite(rollTotal) ? rollTotal : null,
                 initiativeDescription: description,
@@ -3217,6 +3409,7 @@ async function processActionOptionTurn(
     console.log(`${MODULE_ID} | ${actor.name} Initiative EML test:`, {
         baseEML: baseInitiativeEML,
         missedInitiativeBonus,
+        prepareForInitiativeBonus,
         eml: initiativeEML,
         roll: rollTotal,
         success,
@@ -3286,6 +3479,10 @@ async function cleanupCombatMarkers(combat) {
 
     hiddenActionSelections.clear();
     clearMissedInitiativeTracking();
+    for (const [key, entry] of prepareForInitiativeBonuses) {
+        if (entry.combatId === combat?.id) prepareForInitiativeBonuses.delete(key);
+    }
+    await persistPrepareForInitiativeBonuses();
 
     for (const key of [...processedCombatTurns]) {
         if (key.startsWith(`${combat?.id}:`)) {
@@ -3391,20 +3588,42 @@ Hooks.on(
  * OPTION BUTTON
  * ============================================================ */
 
-function buildOptionButton(
-    option
-) {
-    const description =
-        ACTION_OPTION_DESCRIPTIONS[option.id] ?? "";
+function getActionOptionsAllowedForCurrentContext() {
+    const combat = game.combat;
+    if (!combat?.started) return null; // null means all options are available.
+
+    const currentCombatant = combat.combatant;
+    const currentActorName = currentCombatant?.actor?.name
+        ?? currentCombatant?.token?.name
+        ?? "";
+
+    if (currentActorName === CHOOSE_ACTION_OPTIONS_ACTOR_NAME) {
+        return new Set(
+            [...NORMAL_ACTION_OPTIONS, ...MOUNTED_ACTION_OPTIONS]
+                .map(option => option.id)
+                .filter(id => !["walk", "mounted-walk", "prepare-for-initiative"].includes(id))
+        );
+    }
+
+    return new Set([
+        "rest", "pass", "walk", "rise", "grope", "reload", "prepare-for-initiative",
+        "mounted-rest", "mounted-pass", "mount-dismount", "mounted-walk", "mounted-reload"
+    ]);
+}
+
+function buildOptionButton(option, allowedOptionIds = null) {
+    const description = ACTION_OPTION_DESCRIPTIONS[option.id] ?? "";
+    const unavailable = allowedOptionIds !== null && !allowedOptionIds.has(option.id);
 
     return `
         <button
             type="button"
-            class="hm-action-option"
+            class="hm-action-option${unavailable ? " unavailable" : ""}"
             data-option-id="${escapeHTML(option.id)}"
             data-category="${escapeHTML(option.category)}"
             data-description="${escapeHTML(description)}"
-            title="${escapeHTML(description)}"
+            ${unavailable ? "disabled aria-disabled=\"true\"" : ""}
+            title="${escapeHTML(unavailable ? `${option.name} is unavailable during this turn.` : description)}"
         >
             ${escapeHTML(option.name)}
         </button>
@@ -3723,14 +3942,15 @@ async function openActionOptionDialog() {
         return;
     }
 
+    const allowedOptionIds = getActionOptionsAllowedForCurrentContext();
     const normalButtons = NORMAL_ACTION_OPTIONS
         .filter(option => option.category === "primary")
-        .map(buildOptionButton)
+        .map(option => buildOptionButton(option, allowedOptionIds))
         .join("");
 
     const mountedButtons = MOUNTED_ACTION_OPTIONS
         .filter(option => option.category === "primary")
-        .map(buildOptionButton)
+        .map(option => buildOptionButton(option, allowedOptionIds))
         .join("");
 
     const content = `
@@ -3742,6 +3962,8 @@ async function openActionOptionDialog() {
             .hm-action-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:5px; }
             .hm-action-option { min-height:34px; padding:5px 6px; cursor:pointer; border:1px solid #555; border-radius:4px; background:#222; color:#ddd; }
             .hm-action-option:hover { background:#333; }
+            .hm-action-option:disabled, .hm-action-option.unavailable { opacity:.38; cursor:not-allowed; background:#181818; color:#888; border-color:#333; }
+            .hm-action-option:disabled:hover { background:#181818; }
             .hm-action-option.selected { background:#8b0000; border-color:#ff5555; color:white; box-shadow:0 0 5px rgba(255,80,80,.6); }
             .hm-action-attack-list { display:grid; grid-template-columns:repeat(2,1fr); gap:5px; }
             .hm-action-attack-option-row { display:flex; align-items:flex-start; gap:7px; padding:7px; border:1px solid #555; border-radius:4px; background:#222; cursor:pointer; color:#ddd; }
@@ -3827,6 +4049,7 @@ async function openActionOptionDialog() {
 
             for (const button of buttons) {
                 button.addEventListener("click", () => {
+                    if (button.disabled) return;
                     const selectedId = button.dataset.optionId;
 
                     /* Aiming and Called Shot are selected only through Missile Attack's Available Options. */
@@ -4111,6 +4334,10 @@ Hooks.on(
 Hooks.once(
     "ready",
     async () => {
+
+        if (game.user?.isGM) {
+            await loadPrepareForInitiativeBonuses();
+        }
 
         globalThis.HarnMasterActionOptions = {
 
