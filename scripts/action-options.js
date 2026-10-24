@@ -1,5 +1,8 @@
 const MODULE_ID = "harnmaster-action-options";
 
+/* Previous token coordinates captured before a document update. */
+const actionOptionTokenPreviousPositions = new Map();
+
 /*
  * HarnMaster creates automatic Initiative roll ChatMessages at the
  * beginning of combat rounds. Those messages are marked by the Core
@@ -38,6 +41,70 @@ const MACRO_NAME = "HarnMaster — Choose Action Option";
 const CHOOSE_ACTION_OPTIONS_ACTOR_NAME = "Choose Action Options";
 const CHOOSE_ACTION_OPTIONS_ACTOR_FLAG = "chooseActionOptionsActor";
 const CHOOSE_ACTION_OPTIONS_INITIATIVE = 1000;
+const CONTROL_ACTOR_PORTRAIT = "icons/svg/mystery-man.svg";
+const CHOOSE_FAILED_ACTION_OPTION_ACTOR_NAME = "Choose Failed Action Options";
+const CHOOSE_FAILED_ACTION_OPTION_ACTOR_FLAG = "chooseFailedActionOptionActor";
+const CHOOSE_FAILED_ACTION_OPTION_INITIATIVE = 999;
+
+
+/*
+ * HARD INITIATIVE OVERRIDE FOR CONTROL COMBATANTS
+ *
+ * The HarnMaster system may roll Initiative automatically when a round
+ * starts and write that result back to the Combatant. Do not rely on the
+ * roll dialog, chat message, or Initiative skill ML to control their order.
+ * Whenever Foundry attempts to update either control Combatant's initiative,
+ * replace the proposed value with its fixed value instead.
+ */
+function getActionOptionControlInitiative(combatant) {
+    const actor = combatant?.actor;
+    const actorName = actor?.name?.trim();
+    const tokenName = combatant?.name?.trim() ?? combatant?.token?.name?.trim();
+
+    if (
+        actor?.getFlag?.(MODULE_ID, CHOOSE_ACTION_OPTIONS_ACTOR_FLAG) === true ||
+        [CHOOSE_ACTION_OPTIONS_ACTOR_NAME, "Choose Action Option"].includes(actorName) ||
+        [CHOOSE_ACTION_OPTIONS_ACTOR_NAME, "Choose Action Option"].includes(tokenName)
+    ) {
+        return CHOOSE_ACTION_OPTIONS_INITIATIVE;
+    }
+
+    if (
+        actor?.getFlag?.(MODULE_ID, CHOOSE_FAILED_ACTION_OPTION_ACTOR_FLAG) === true ||
+        [CHOOSE_FAILED_ACTION_OPTION_ACTOR_NAME, "Choose Failed Action Option"].includes(actorName) ||
+        [CHOOSE_FAILED_ACTION_OPTION_ACTOR_NAME, "Choose Failed Action Option"].includes(tokenName)
+    ) {
+        return CHOOSE_FAILED_ACTION_OPTION_INITIATIVE;
+    }
+
+    return null;
+}
+
+Hooks.on("preUpdateCombatant", (combatant, changes) => {
+    const fixedInitiative = getActionOptionControlInitiative(combatant);
+    if (fixedInitiative === null) return;
+
+    // Initiative rolls and other updates cannot change these two values.
+    if (Object.prototype.hasOwnProperty.call(changes, "initiative")) {
+        changes.initiative = fixedInitiative;
+    }
+});
+
+// A second safeguard: after a combat update, repair any control Combatant
+// that already received a rolled value through a system-specific update path.
+Hooks.on("updateCombat", combat => {
+    if (!game?.user?.isGM || !combat?.combatants) return;
+
+    for (const combatant of combat.combatants) {
+        const fixedInitiative = getActionOptionControlInitiative(combatant);
+        if (fixedInitiative === null) continue;
+        if (Number(combatant.initiative) === fixedInitiative) continue;
+
+        void combatant.update({ initiative: fixedInitiative }).catch(error => {
+            console.error(`${MODULE_ID} | Could not restore fixed Initiative for control combatant`, error);
+        });
+    }
+});
 
 const NORMAL_ACTION_OPTIONS = [
     { id: "rest", name: "Rest", category: "primary" },
@@ -703,6 +770,7 @@ let DiceHM3 = null;
 
 /* Prevent multiple combat-start events from creating duplicate setup data. */
 let chooseActionOptionsSetupPromise = null;
+let chooseFailedActionOptionSetupPromise = null;
 
 /* Token UUID of the character whose turn was processed most recently. */
 
@@ -1154,6 +1222,37 @@ async function removeMissedInitiativeMarker(tokenUuid, scene = canvas?.scene) {
     if (!marker || !scene) return;
     await scene.deleteEmbeddedDocuments("Tile", [marker.id]);
 }
+
+async function updateMissileWeaponStatusMarkerPosition(token) {
+    const tokenDocument = token?.document ?? token;
+    if (!tokenDocument?.uuid) return;
+
+    const scene = tokenDocument.parent ?? canvas?.scene;
+    if (!scene) return;
+
+    const markers = scene.tiles?.filter(tile =>
+        tile.getFlag(MODULE_ID, "missileWeaponStatusMarker")?.tokenUuid === tokenDocument.uuid
+    ) ?? [];
+    if (markers.length === 0) return;
+
+    const gridSize = Number(scene.grid?.size) || Number(canvas?.grid?.size) || 100;
+    const gap = gridSize * 0.04;
+    const tokenX = Number(tokenDocument.x) || 0;
+    const tokenY = Number(tokenDocument.y) || 0;
+    const tokenWidth = (Number(tokenDocument.width) || 1) * gridSize;
+    const tokenHeight = (Number(tokenDocument.height) || 1) * gridSize;
+
+    await Promise.all(markers.map(marker => {
+        const markerWidth = Number(marker.width) || gridSize * 0.5;
+        const markerHeight = Number(marker.height) || gridSize * 0.5;
+        return marker.update({
+            x: tokenX - markerWidth - gap,
+            y: tokenY + tokenHeight - markerHeight,
+            elevation: (Number(tokenDocument.elevation) || 0) + 0.01
+        });
+    }));
+}
+
 
 async function updateMissedInitiativeMarkerPosition(token) {
     const tokenDocument = token?.document ?? token;
@@ -1722,6 +1821,21 @@ function handleActionOptionSocket(
                     else {
 
                         /*
+                         * A persistent Aim Missile / Called Shot token lasts until
+                         * the player chooses another Action Option. Remove any prior
+                         * revealed graphics at the moment this new selection is made,
+                         * even when the new selection will remain concealed until Initiative.
+                         */
+                        const priorSelectionTokenUuid = data.tokenUuid ?? null;
+                        if (priorSelectionTokenUuid && data.sceneId === canvas?.scene?.id) {
+                            const priorTokenDocument = await fromUuid(priorSelectionTokenUuid);
+                            const priorScene = priorTokenDocument?.parent ?? canvas?.scene;
+                            if (priorScene) {
+                                await removeRevealedActionOptionToken(priorSelectionTokenUuid, priorScene);
+                            }
+                        }
+
+                        /*
                          * Store the actual selection only in the
                          * GM's memory.
                          */
@@ -1807,10 +1921,13 @@ function handleActionOptionSocket(
                                 const activeActorUuid = activeCombatant?.actor?.uuid ?? null;
                                 const selectingOnOwnTurn = Boolean(
                                     activeCombat?.started &&
-                                    !isChooseActionOptionsActor(activeCombatant?.actor) &&
                                     (
-                                        activeTokenUuid === tokenDocument.uuid ||
-                                        (!activeTokenUuid && activeActorUuid === actor.uuid)
+                                        isChooseFailedActionOptionActor(activeCombatant?.actor) && getMissedInitiativeFailureCount(tokenDocument.uuid) > 0
+                                        || (!isActionOptionControlActor(activeCombatant?.actor) &&
+                                            (
+                                                activeTokenUuid === tokenDocument.uuid ||
+                                                (!activeTokenUuid && activeActorUuid === actor.uuid)
+                                            ))
                                     )
                                 );
 
@@ -2351,10 +2468,18 @@ function isChooseActionOptionsActor(actor) {
         return true;
     }
 
-    return (
-        actor.name?.trim() ===
-        CHOOSE_ACTION_OPTIONS_ACTOR_NAME
-    );
+    return [CHOOSE_ACTION_OPTIONS_ACTOR_NAME, "Choose Action Option"].includes(actor.name?.trim());
+}
+
+function isChooseFailedActionOptionActor(actor) {
+    return Boolean(actor && (
+        actor.getFlag?.(MODULE_ID, CHOOSE_FAILED_ACTION_OPTION_ACTOR_FLAG) === true ||
+        [CHOOSE_FAILED_ACTION_OPTION_ACTOR_NAME, "Choose Failed Action Option"].includes(actor.name?.trim())
+    ));
+}
+
+function isActionOptionControlActor(actor) {
+    return isChooseActionOptionsActor(actor) || isChooseFailedActionOptionActor(actor);
 }
 
 
@@ -2390,10 +2515,8 @@ function findChooseActionOptionsActor() {
     }
 
     /* Preserve compatibility with the user's existing Actor. */
-    return game.actors.find(
-        actor =>
-            actor.name?.trim() ===
-            CHOOSE_ACTION_OPTIONS_ACTOR_NAME
+    return game.actors.find(actor =>
+        [CHOOSE_ACTION_OPTIONS_ACTOR_NAME, "Choose Action Option"].includes(actor.name?.trim())
     ) ?? null;
 }
 
@@ -2407,7 +2530,7 @@ function findInitiativeTemplate() {
     for (const actor of game.actors) {
 
         if (
-            isChooseActionOptionsActor(actor)
+            isActionOptionControlActor(actor)
         ) {
             continue;
         }
@@ -2424,6 +2547,35 @@ function findInitiativeTemplate() {
     }
 
     return null;
+}
+
+
+async function ensureControlInitiativeSkill(actor, masteryLevel) {
+    let initiative = findInitiativeSkill(actor);
+
+    if (!initiative) {
+        const template = findInitiativeTemplate();
+        if (!template?.initiative) {
+            console.warn(`${MODULE_ID} | No Initiative skill template found; fixed Combatant Initiative override will still apply.`, actor?.name);
+            return null;
+        }
+
+        const initiativeData = foundry.utils.deepClone(template.initiative.toObject());
+        delete initiativeData._id;
+        delete initiativeData._stats;
+        initiativeData.name = "Initiative";
+        initiativeData.system ??= {};
+        initiativeData.system.masteryLevel = String(masteryLevel);
+
+        const created = await actor.createEmbeddedDocuments("Item", [initiativeData]);
+        initiative = created?.[0] ?? findInitiativeSkill(actor);
+    }
+
+    if (initiative && String(initiative.system?.masteryLevel) !== String(masteryLevel)) {
+        await initiative.update({ "system.masteryLevel": String(masteryLevel) });
+    }
+
+    return initiative;
 }
 
 
@@ -2447,6 +2599,12 @@ async function createChooseActionOptionsActor() {
             );
         }
 
+        if (actor.name !== CHOOSE_ACTION_OPTIONS_ACTOR_NAME || actor.img !== CONTROL_ACTOR_PORTRAIT) {
+            await actor.update({ name: CHOOSE_ACTION_OPTIONS_ACTOR_NAME, img: CONTROL_ACTOR_PORTRAIT });
+        }
+
+        // Restore/repair the Initiative skill so HarnMaster does not use ML 0.
+        await ensureControlInitiativeSkill(actor, CHOOSE_ACTION_OPTIONS_INITIATIVE);
         return actor;
     }
 
@@ -2471,7 +2629,7 @@ async function createChooseActionOptionsActor() {
             template.actor.type,
 
         img:
-            template.actor.img,
+            CONTROL_ACTOR_PORTRAIT,
 
         flags: {
             [MODULE_ID]: {
@@ -2521,6 +2679,120 @@ async function createChooseActionOptionsActor() {
 
     console.log(
         `${MODULE_ID} | Created "${CHOOSE_ACTION_OPTIONS_ACTOR_NAME}" Actor with Initiative ML ${CHOOSE_ACTION_OPTIONS_INITIATIVE}.`,
+        actor
+    );
+
+    return actor;
+}
+
+
+function findChooseFailedActionOptionActor() {
+    if (!game?.actors) return null;
+    const flagged = game.actors.find(actor => actor.getFlag?.(MODULE_ID, CHOOSE_FAILED_ACTION_OPTION_ACTOR_FLAG) === true);
+    if (flagged) return flagged;
+    return game.actors.find(actor => [CHOOSE_FAILED_ACTION_OPTION_ACTOR_NAME, "Choose Failed Action Option"].includes(actor.name?.trim())) ?? null;
+}
+
+async function createChooseFailedActionOptionActor() {
+
+    let actor =
+        findChooseFailedActionOptionActor();
+
+    if (actor) {
+
+        if (
+            actor.getFlag?.(
+                MODULE_ID,
+                CHOOSE_FAILED_ACTION_OPTION_ACTOR_FLAG
+            ) !== true
+        ) {
+            await actor.setFlag(
+                MODULE_ID,
+                CHOOSE_FAILED_ACTION_OPTION_ACTOR_FLAG,
+                true
+            );
+        }
+
+        if (actor.name !== CHOOSE_FAILED_ACTION_OPTION_ACTOR_NAME || actor.img !== CONTROL_ACTOR_PORTRAIT) {
+            await actor.update({ name: CHOOSE_FAILED_ACTION_OPTION_ACTOR_NAME, img: CONTROL_ACTOR_PORTRAIT });
+        }
+
+        // Restore/repair the Initiative skill so HarnMaster does not use ML 0.
+        await ensureControlInitiativeSkill(actor, CHOOSE_FAILED_ACTION_OPTION_INITIATIVE);
+        return actor;
+    }
+
+    const template =
+        findInitiativeTemplate();
+
+    if (!template) {
+        throw new Error(
+            "Unable to create the Choose Failed Action Option Actor because no existing HarnMaster Actor with an Initiative skill could be found."
+        );
+    }
+
+    /*
+     * Create a normal HarnMaster Actor so the system supplies all
+     * required default Actor data for the installed system version.
+     */
+    actor = await Actor.create({
+        name:
+            CHOOSE_FAILED_ACTION_OPTION_ACTOR_NAME,
+
+        type:
+            template.actor.type,
+
+        img:
+            CONTROL_ACTOR_PORTRAIT,
+
+        flags: {
+            [MODULE_ID]: {
+                [CHOOSE_FAILED_ACTION_OPTION_ACTOR_FLAG]: true
+            }
+        }
+    });
+
+    if (!actor) {
+        throw new Error(
+            "Foundry did not return the newly created Choose Failed Action Option Actor."
+        );
+    }
+
+    /*
+     * Clone the complete Initiative Item from the existing Actor.
+     * Remove document identity/metadata so Foundry creates a fresh
+     * embedded Item owned by the new Actor.
+     */
+    const initiativeData =
+        foundry.utils.deepClone(
+            template.initiative.toObject()
+        );
+
+    delete initiativeData._id;
+    delete initiativeData._stats;
+
+    initiativeData.name = "Initiative";
+
+    if (!initiativeData.system) {
+        initiativeData.system = {};
+    }
+
+    /*
+     * Only the Mastery Level is overridden. HarnMaster remains
+     * responsible for preparing Effective Mastery Level normally.
+     */
+    initiativeData.system.masteryLevel =
+        String(CHOOSE_FAILED_ACTION_OPTION_INITIATIVE);
+
+    await actor.createEmbeddedDocuments(
+        "Item",
+        [initiativeData]
+    );
+
+    actor.prepareData();
+
+    console.log(
+        `${MODULE_ID} | Created "${CHOOSE_FAILED_ACTION_OPTION_ACTOR_NAME}" Actor with Initiative ML ${CHOOSE_FAILED_ACTION_OPTION_INITIATIVE}.`,
         actor
     );
 
@@ -2615,6 +2887,10 @@ async function ensureChooseActionOptionsCombatant(
             );
         }
 
+        if (tokenDocument.texture?.src !== CONTROL_ACTOR_PORTRAIT || tokenDocument.name !== actor.name) {
+            await tokenDocument.update({ name: actor.name, texture: { src: CONTROL_ACTOR_PORTRAIT } });
+        }
+
         /*
          * Make sure this Token is a Combatant in the current Combat.
          */
@@ -2698,6 +2974,178 @@ async function ensureChooseActionOptionsCombatant(
 }
 
 
+async function ensureChooseFailedActionOptionCombatant(
+    combat
+) {
+
+    if (
+        !game?.user?.isGM ||
+        !combat
+    ) {
+        return null;
+    }
+
+    if (chooseFailedActionOptionSetupPromise) {
+        return chooseFailedActionOptionSetupPromise;
+    }
+
+    chooseFailedActionOptionSetupPromise = (async () => {
+
+        const actor =
+            await createChooseFailedActionOptionActor();
+
+        const scene =
+            combat.scene ??
+            canvas?.scene;
+
+        if (!scene) {
+            throw new Error(
+                "The active combat has no associated Scene."
+            );
+        }
+
+        /*
+         * Find an existing Token for this Actor on the combat Scene.
+         * This allows the user's existing manually-created Token to
+         * continue working without creating a duplicate.
+         */
+        let tokenDocument =
+            scene.tokens?.find(
+                token =>
+                    token.actorId === actor.id
+            ) ?? null;
+
+        if (!tokenDocument) {
+
+            const tokenData =
+                await actor.getTokenDocument({
+                    x: 0,
+                    y: 0,
+                    hidden: true,
+                    actorLink: true
+                });
+
+            const rawTokenData =
+                tokenData.toObject();
+
+            rawTokenData.x = 0;
+            rawTokenData.y = 0;
+            rawTokenData.hidden = true;
+            rawTokenData.actorLink = true;
+            rawTokenData.name =
+                CHOOSE_FAILED_ACTION_OPTION_ACTOR_NAME;
+
+            rawTokenData.flags =
+                foundry.utils.mergeObject(
+                    rawTokenData.flags ?? {},
+                    {
+                        [MODULE_ID]: {
+                            [CHOOSE_FAILED_ACTION_OPTION_ACTOR_FLAG]: true
+                        }
+                    }
+                );
+
+            const createdTokens =
+                await scene.createEmbeddedDocuments(
+                    "Token",
+                    [rawTokenData]
+                );
+
+            tokenDocument =
+                createdTokens?.[0] ?? null;
+        }
+
+        if (!tokenDocument) {
+            throw new Error(
+                "Unable to create or locate the Choose Failed Action Option Token."
+            );
+        }
+
+        if (tokenDocument.texture?.src !== CONTROL_ACTOR_PORTRAIT || tokenDocument.name !== actor.name) {
+            await tokenDocument.update({ name: actor.name, texture: { src: CONTROL_ACTOR_PORTRAIT } });
+        }
+
+        /*
+         * Make sure this Token is a Combatant in the current Combat.
+         */
+        let combatant =
+            combat.combatants?.find(
+                entry =>
+                    entry.tokenId ===
+                    tokenDocument.id
+            ) ?? null;
+
+        if (!combatant) {
+
+            const createdCombatants =
+                await foundry.documents.TokenDocument.createCombatants(
+                    [tokenDocument],
+                    { combat }
+                );
+
+            combatant =
+                createdCombatants?.find(
+                    entry =>
+                        entry.tokenId ===
+                        tokenDocument.id
+                ) ??
+                combat.combatants?.find(
+                    entry =>
+                        entry.tokenId ===
+                        tokenDocument.id
+                ) ??
+                null;
+        }
+
+        if (!combatant) {
+            throw new Error(
+                "Unable to create the Choose Failed Action Option Combatant."
+            );
+        }
+
+        /*
+         * Always force the control combatant to Initiative 1000.
+         * This is intentionally a Combatant initiative value, not
+         * the HarnMaster skill ML. The skill remains at ML 1000 as
+         * well, preserving the user's original setup.
+         */
+        if (
+            Number(combatant.initiative) !==
+            CHOOSE_FAILED_ACTION_OPTION_INITIATIVE
+        ) {
+            await combatant.update({
+                initiative:
+                    CHOOSE_FAILED_ACTION_OPTION_INITIATIVE
+            });
+        }
+
+        console.log(
+            `${MODULE_ID} | Choose Failed Action Option combatant is ready.`,
+            {
+                actor: actor.name,
+                actorUuid: actor.uuid,
+                tokenUuid: tokenDocument.uuid,
+                combatId: combat.id,
+                initiative:
+                    CHOOSE_FAILED_ACTION_OPTION_INITIATIVE
+            }
+        );
+
+        return {
+            actor,
+            tokenDocument,
+            combatant
+        };
+
+    })();
+
+    try {
+        return await chooseFailedActionOptionSetupPromise;
+    }
+    finally {
+        chooseFailedActionOptionSetupPromise = null;
+    }
+}
 
 
 /* ============================================================
@@ -2838,6 +3286,35 @@ async function removeRevealedActionOptionToken(
     );
 
     return tokens.length;
+}
+
+
+function isPersistentActionOptionId(actionOptionId) {
+    return [
+        "aim-missile",
+        "called-shot",
+        "mounted-aim-missile",
+        "mounted-called-shot"
+    ].includes(actionOptionId);
+}
+
+
+async function removeRoundEndRevealedActionOptionTokens(
+    scene = canvas?.scene
+) {
+    if (!scene) return 0;
+
+    const tokenIds = scene.tiles?.filter(tile => {
+        const flag = tile.getFlag(MODULE_ID, REVEALED_ACTION_OPTION_FLAG);
+        if (!flag) return false;
+
+        // Aim Missile and Called Shot graphics persist across rounds.
+        return !isPersistentActionOptionId(flag.sourceId ?? flag.actionOptionId);
+    }).map(tile => tile.id) ?? [];
+
+    if (tokenIds.length === 0) return 0;
+    await scene.deleteEmbeddedDocuments("Tile", tokenIds);
+    return tokenIds.length;
 }
 
 
@@ -3092,6 +3569,9 @@ async function createRevealedActionOptionToken(
                         selectionType:
                             graphic.type,
 
+                        persistentUntilNewSelection:
+                            isPersistentActionOptionId(graphic.sourceId ?? graphic.graphicId),
+
                         revealedAt:
                             Date.now()
                     }
@@ -3231,11 +3711,12 @@ async function updateRevealedActionOptionTokenPosition(
  * This function does NOT prevent the character from acting.
  */
 async function processActionOptionTurn(
-    combat
+    combat,
+    combatantOverride = null
 ) {
     if (!game?.user?.isGM || !combat?.started) return;
 
-    const combatant = combat.combatant;
+    const combatant = combatantOverride ?? combat.combatant;
     if (!combatant) return;
 
     const tokenDocument = await getCombatantTokenDocument(combatant);
@@ -3244,18 +3725,36 @@ async function processActionOptionTurn(
 
     /* The control combatant begins each round. Missed Initiative streaks
      * intentionally survive the round boundary until an Initiative test succeeds. */
-    if (isChooseActionOptionsActor(actor)) {
+    if (!combatantOverride && isChooseActionOptionsActor(actor)) {
         try {
             const clearedSelectionCount = hiddenActionSelections.size;
             hiddenActionSelections.clear();
             const removedConcealedCount = await removeAllConcealedActionMarkers(canvas?.scene);
-            const removedRevealedCount = await removeAllRevealedActionOptionTokens(canvas?.scene);
-            console.log(`${MODULE_ID} | Choose Action Options turn: reset ${clearedSelectionCount} character selection(s), cleared ${removedConcealedCount} concealed marker(s), and ${removedRevealedCount} revealed Action Option token(s).`);
+            const removedRevealedCount = await removeRoundEndRevealedActionOptionTokens(canvas?.scene);
+            console.log(`${MODULE_ID} | Choose Action Options turn: reset ${clearedSelectionCount} character selection(s), cleared ${removedConcealedCount} concealed marker(s), and ${removedRevealedCount} non-persistent revealed Action Option token(s). Persistent Aim Missile and Called Shot tokens were retained.`);
         } catch (error) {
             console.error(`${MODULE_ID} | Could not clear Action Option markers at the beginning of the round`, error);
         }
         return;
     }
+
+    if (!combatantOverride && isChooseFailedActionOptionActor(actor)) {
+        const batchKey = `${combat.id}:${Number(combat.round ?? 0)}:batch-initiative`;
+        if (processedCombatTurns.has(batchKey)) return;
+        processedCombatTurns.add(batchKey);
+        const eligible = [...(combat.combatants ?? [])].filter(entry =>
+            entry.actor && !isActionOptionControlActor(entry.actor) && !entry.defeated
+        );
+        for (const entry of eligible) {
+            await processActionOptionTurn(combat, entry);
+        }
+        console.log(`${MODULE_ID} | Completed batch Initiative tests for ${eligible.length} combatant(s) in round ${combat.round}.`);
+        return;
+    }
+    if (!combatantOverride && isActionOptionControlActor(actor)) return;
+    // Initiative is resolved in one batch on the second control turn, never on character turns.
+    if (!combatantOverride) return;
+    if (isActionOptionControlActor(actor)) return;
 
     const turnKey = [combat.id, Number(combat.round ?? 0), Number(combat.turn ?? 0), combatant.id].join(":");
     if (processedCombatTurns.has(turnKey)) return;
@@ -3436,7 +3935,7 @@ Hooks.on(
 
         clearMissedInitiativeTracking();
 
-        void ensureChooseActionOptionsCombatant(combat).catch(error => {
+        void Promise.all([ensureChooseActionOptionsCombatant(combat), ensureChooseFailedActionOptionCombatant(combat)]).catch(error => {
             console.error(
                 `${MODULE_ID} | Could not prepare the Choose Action Options combatant when combat was created`,
                 error
@@ -3544,9 +4043,8 @@ Hooks.on(
 
                 try {
 
-                    await ensureChooseActionOptionsCombatant(
-                        combat
-                    );
+                    await ensureChooseActionOptionsCombatant(combat);
+                    await ensureChooseFailedActionOptionCombatant(combat);
 
                 }
 
@@ -3590,25 +4088,38 @@ Hooks.on(
 
 function getActionOptionsAllowedForCurrentContext() {
     const combat = game.combat;
-    if (!combat?.started) return null; // null means all options are available.
+    if (!combat?.started) return null; // null means all options are available outside active combat.
 
     const currentCombatant = combat.combatant;
-    const currentActorName = currentCombatant?.actor?.name
+    const currentActor = currentCombatant?.actor;
+    const currentActorName = currentActor?.name
         ?? currentCombatant?.token?.name
         ?? "";
 
-    if (currentActorName === CHOOSE_ACTION_OPTIONS_ACTOR_NAME) {
-        return new Set(
-            [...NORMAL_ACTION_OPTIONS, ...MOUNTED_ACTION_OPTIONS]
-                .map(option => option.id)
-                .filter(id => !["walk", "mounted-walk", "prepare-for-initiative"].includes(id))
-        );
+    // The first control phase is for the character's intended action.
+    // Every normal and mounted Action Option must be available here.
+    if (
+        isChooseActionOptionsActor(currentActor) ||
+        currentActorName === CHOOSE_ACTION_OPTIONS_ACTOR_NAME
+    ) {
+        return null;
     }
 
-    return new Set([
-        "rest", "pass", "walk", "rise", "grope", "reload", "prepare-for-initiative",
-        "mounted-rest", "mounted-pass", "mount-dismount", "mounted-walk", "mounted-reload"
-    ]);
+    // The restricted Failed Action Option list is available only during
+    // the second control phase, after Initiative has been resolved.
+    if (
+        isChooseFailedActionOptionActor(currentActor) ||
+        currentActorName === CHOOSE_FAILED_ACTION_OPTION_ACTOR_NAME
+    ) {
+        return new Set([
+            "rest", "pass", "walk", "rise", "grope", "reload", "prepare-for-initiative",
+            "mounted-rest", "mounted-pass", "mount-dismount", "mounted-walk", "mounted-reload"
+        ]);
+    }
+
+    // Do not expose the failed-Initiative choices during ordinary character
+    // turns; they belong exclusively to Choose Failed Action Option.
+    return new Set();
 }
 
 function buildOptionButton(option, allowedOptionIds = null) {
@@ -4135,12 +4646,87 @@ async function ensurePlayerMacro() {
  * TOKEN MOVEMENT
  * ============================================================ */
 
+/*
+ * Capture the old position before Foundry applies a Token update. The
+ * subsequent updateToken hook can then calculate the actual movement
+ * delta and apply that same delta to every other Token for the same Actor
+ * on the same Scene. This preserves the relative positions of duplicate
+ * character Tokens instead of stacking them on top of one another.
+ */
+Hooks.on(
+    "preUpdateToken",
+    (token, changes) => {
+        if (changes.x === undefined && changes.y === undefined) return;
+
+        actionOptionTokenPreviousPositions.set(token.uuid, {
+            x: Number(token.x) || 0,
+            y: Number(token.y) || 0
+        });
+    }
+);
+
+async function moveOtherTokensForSameActor(token, previousPosition, options = {}) {
+    // Follower updates must not recursively move the remaining Tokens.
+    if (options?.hmActionOptionsFollowerSync === true) return;
+
+    const tokenDocument = token?.document ?? token;
+    const scene = tokenDocument?.parent;
+    const actorId = tokenDocument?.actorId;
+
+    if (!scene || !actorId || !previousPosition) return;
+
+    const deltaX = (Number(tokenDocument.x) || 0) - previousPosition.x;
+    const deltaY = (Number(tokenDocument.y) || 0) - previousPosition.y;
+
+    if (deltaX === 0 && deltaY === 0) return;
+
+    const relatedTokens = scene.tokens?.filter(other =>
+        other.id !== tokenDocument.id &&
+        other.actorId === actorId
+    ) ?? [];
+
+    if (relatedTokens.length === 0) return;
+
+    await Promise.all(relatedTokens.map(other => other.update(
+        {
+            x: (Number(other.x) || 0) + deltaX,
+            y: (Number(other.y) || 0) + deltaY
+        },
+        { hmActionOptionsFollowerSync: true }
+    )));
+}
+
 Hooks.on(
     "updateToken",
     async (
         token,
-        changes
+        changes,
+        options
     ) => {
+        const tokenDocument = token?.document ?? token;
+        const moved = changes.x !== undefined || changes.y !== undefined;
+        const previousPosition = moved
+            ? actionOptionTokenPreviousPositions.get(tokenDocument?.uuid)
+            : null;
+
+        if (moved) {
+            actionOptionTokenPreviousPositions.delete(tokenDocument?.uuid);
+            try {
+                await moveOtherTokensForSameActor(
+                    tokenDocument,
+                    previousPosition,
+                    options
+                );
+            } catch (error) {
+                console.error(
+                    `${MODULE_ID} | Could not synchronize Tokens representing the same character`,
+                    error
+                );
+                ui.notifications?.warn?.(
+                    "Some duplicate character Tokens could not be moved. See the browser console for details."
+                );
+            }
+        }
 
         if (
             changes.x === undefined &&
@@ -4151,19 +4737,130 @@ Hooks.on(
             return;
         }
 
-        await updateConcealedActionMarkerPosition(
-            token
-        );
-
-        await updateRevealedActionOptionTokenPosition(
-            token
-        );
-
-        await updateMissedInitiativeMarkerPosition(
-            token
-        );
+        // Each Token's own Action Option markers/graphics follow it. Since
+        // duplicate character Tokens receive the same movement delta, their
+        // associated graphics remain attached to the appropriate Token too.
+        await updateConcealedActionMarkerPosition(tokenDocument);
+        await updateRevealedActionOptionTokenPosition(tokenDocument);
+        await updateMissedInitiativeMarkerPosition(tokenDocument);
     }
 );
+
+
+/*
+ * Missile weapon status indicators are independent Scene Tiles created by
+ * the Set Missile Weapon Loaded Status macro. Give them their own hook so
+ * a failure in any Action Option marker updater cannot prevent them moving.
+ */
+/*
+ * Reconcile status tiles after Foundry has completed the token update.
+ * Mouse dragging can emit its final document update at a different point
+ * in the drag lifecycle than keyboard movement. A short deferred pass reads
+ * the final TokenDocument coordinates rather than a transient drag position.
+ */
+const missileStatusSyncTimers = new Map();
+
+function scheduleMissileWeaponStatusMarkerSync(token) {
+    const tokenDocument = token?.document ?? token;
+    if (!tokenDocument?.uuid) return;
+
+    const uuid = tokenDocument.uuid;
+    const previousTimer = missileStatusSyncTimers.get(uuid);
+    if (previousTimer) clearTimeout(previousTimer);
+
+    // TokenDocument coordinates can interpolate toward the requested drag
+    // destination for several hundred milliseconds after updateToken fires.
+    // Wait until the coordinates stop changing before positioning the tile.
+    const timer = setTimeout(async () => {
+        try {
+            const scene = tokenDocument.parent ?? canvas?.scene;
+            const tokenId = tokenDocument.id;
+            let lastX = null;
+            let lastY = null;
+            let stableSamples = 0;
+            const startedAt = Date.now();
+            const settleTolerance = 0.5;
+            const requiredStableSamples = 3;
+            const pollIntervalMs = 100;
+            const maxWaitMs = 5000;
+
+            while (Date.now() - startedAt < maxWaitMs) {
+                const latestToken = scene?.tokens?.get?.(tokenId) ?? tokenDocument;
+                const x = Number(latestToken.x) || 0;
+                const y = Number(latestToken.y) || 0;
+
+                if (
+                    lastX !== null &&
+                    Math.abs(x - lastX) <= settleTolerance &&
+                    Math.abs(y - lastY) <= settleTolerance
+                ) {
+                    stableSamples++;
+                } else {
+                    stableSamples = 0;
+                }
+
+                lastX = x;
+                lastY = y;
+
+                if (stableSamples >= requiredStableSamples) break;
+                await new Promise(resolve => setTimeout(resolve, pollIntervalMs));
+            }
+
+            const sceneNow = tokenDocument.parent ?? canvas?.scene;
+            const finalToken = sceneNow?.tokens?.get?.(tokenDocument.id) ?? tokenDocument;
+            await updateMissileWeaponStatusMarkerPosition(finalToken);
+        } catch (error) {
+            console.error(
+                `${MODULE_ID} | Could not reconcile missile weapon status marker after movement`,
+                { tokenUuid: uuid, error }
+            );
+        } finally {
+            missileStatusSyncTimers.delete(uuid);
+        }
+    }, 80);
+
+    missileStatusSyncTimers.set(uuid, timer);
+}
+
+Hooks.on("updateToken", (token, changes) => {
+    if (
+        changes.x === undefined &&
+        changes.y === undefined &&
+        changes.width === undefined &&
+        changes.height === undefined
+    ) return;
+
+    scheduleMissileWeaponStatusMarkerSync(token);
+});
+
+// Also reconcile existing status markers when the Scene is ready, so stale
+// positions are corrected even if a prior movement hook was missed.
+Hooks.on("canvasReady", async () => {
+    const scene = canvas?.scene;
+    if (!scene) return;
+
+    const markerTiles = scene.tiles?.filter(tile =>
+        Boolean(tile.getFlag(MODULE_ID, "missileWeaponStatusMarker")?.tokenUuid)
+    ) ?? [];
+
+    const tokenUuids = [...new Set(markerTiles.map(tile =>
+        tile.getFlag(MODULE_ID, "missileWeaponStatusMarker")?.tokenUuid
+    ).filter(Boolean))];
+
+    for (const tokenUuid of tokenUuids) {
+        try {
+            const tokenDocument = await fromUuid(tokenUuid);
+            if (tokenDocument?.parent?.id === scene.id) {
+                await updateMissileWeaponStatusMarkerPosition(tokenDocument);
+            }
+        } catch (error) {
+            console.error(
+                `${MODULE_ID} | Could not reconcile missile status marker on Scene ready`,
+                { tokenUuid, error }
+            );
+        }
+    }
+});
 
 
 /* ============================================================
