@@ -2,7 +2,7 @@
   "id": "harnmaster-action-options",
   "title": "HarnMaster Action Options",
   "description": "Action Option management for HarnMaster combat in Foundry Virtual Tabletop.",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "socket": true,
   "compatibility": {
     "minimum": "14",
@@ -15,7 +15,7 @@
   ],
   "url": "https://github.com/Wink8008/HarnMaster-Action-Options",
   "manifest": "https://raw.githubusercontent.com/Wink8008/HarnMaster-Action-Options/master/module.json",
-  "download": "https://github.com/Wink8008/HarnMaster-Action-Options/releases/download/0.1.8/harnmaster-action-options.zip",
+  "download": "https://github.com/Wink8008/HarnMaster-Action-Options/releases/download/0.1.9/harnmaster-action-options.zip",
   "esmodules": [
     "scripts/action-options.js"
   ]

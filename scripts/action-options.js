@@ -1141,22 +1141,94 @@ function getMissedInitiativeImage(failureCount) {
     return `${MISSED_INITIATIVE_IMAGE_ROOT}/ini-plus-${displayedBonus}.webp`;
 }
 
-function getMissedInitiativeMarkerPosition(token) {
-    const gridSize = canvas?.grid?.size ?? 100;
-    const markerSize = gridSize * CONCEALED_MARKER_SIZE;
-    const gap = gridSize * CONCEALED_MARKER_GAP;
+/*
+ * Return a point on the perimeter of the character's hex. Foundry's
+ * token x/y and width/height describe the cell's pixel bounds. Hex grids
+ * with offset rows are flat-top; grids with offset columns are pointy-top.
+ * Marker tiles are positioned by their center, not their upper-left corner.
+ */
+function getTokenHexBorderAnchor(token, side) {
+    const gridSize = Number(canvas?.grid?.size ?? token?.parent?.grid?.size) || 100;
     const tokenWidth = (Number(token?.width) || 1) * gridSize;
     const tokenHeight = (Number(token?.height) || 1) * gridSize;
     const tokenX = Number(token?.x);
     const tokenY = Number(token?.y);
 
     if (!Number.isFinite(tokenX) || !Number.isFinite(tokenY)) {
-        throw new Error("Unable to determine the character's position for the Missed Initiative marker.");
+        throw new Error("Unable to determine the character's position on the hex grid.");
+    }
+
+    const gridType = token?.parent?.grid?.type ?? canvas?.grid?.type;
+    const gridTypes = globalThis.CONST?.GRID_TYPES ?? {};
+    const rowOffsetTypes = [gridTypes.HEXODDR, gridTypes.HEXEVENR].filter(value => value !== undefined);
+    const columnOffsetTypes = [gridTypes.HEXODDQ, gridTypes.HEXEVENQ].filter(value => value !== undefined);
+    const isHex = rowOffsetTypes.includes(gridType) || columnOffsetTypes.includes(gridType);
+    // Foundry row-offset grids (HEXODDR/HEXEVENR) are flat-top;
+    // column-offset grids (HEXODDQ/HEXEVENQ) are pointy-top. If the grid type
+    // is unavailable, use pointy-top as the fallback for hex placement.
+    const isPointyTop = columnOffsetTypes.includes(gridType) ||
+        (!rowOffsetTypes.includes(gridType) && !columnOffsetTypes.includes(gridType));
+
+    // On a hex grid, anchor to the top point/edge and the lower-left/right
+    // sloping edges. The square-grid fallback uses the corresponding corners.
+    if (side === "top") {
+        return { x: tokenX + tokenWidth / 2, y: tokenY };
+    }
+
+    if (isHex && isPointyTop) {
+        // Pointy-top hex: the lower sloping edges run from the bottom vertex
+        // (x + 0.5w, y + h) toward the lower-left/right vertices. Their
+        // midpoints are approximately x + 0.283w / 0.717w, y + 0.875h.
+        return {
+            x: tokenX + tokenWidth * (side === "bottom-left" ? 0.28349365 : 0.71650635),
+            y: tokenY + tokenHeight * 0.875
+        };
+    }
+
+    if (isHex) {
+        // Flat-top hex: lower sloping edge midpoints are at x + 0.75w /
+        // 0.25w and y + 0.75h.
+        return {
+            x: tokenX + tokenWidth * (side === "bottom-left" ? 0.25 : 0.75),
+            y: tokenY + tokenHeight * 0.75
+        };
     }
 
     return {
-        x: tokenX + tokenWidth + gap,
-        y: tokenY + tokenHeight + gap,
+        x: tokenX + tokenWidth * (side === "bottom-left" ? 0.25 : 0.75),
+        y: tokenY + tokenHeight
+    };
+}
+
+function getMissedInitiativeMarkerPosition(token) {
+    /*
+     * Match the center-based placement used by the action-option graphics,
+     * but anchor this marker at the bottom-right of the character's graphic.
+     * Token x/y are the upper-left of the token cell in scene pixels; the
+     * marker tile x/y are its upper-left, so subtract half the marker size
+     * to place its center on the bottom-right corner of the token bounds.
+     * This scales with the active grid and token dimensions.
+     */
+    const gridSize = Number(canvas?.grid?.size ?? token?.parent?.grid?.size) || 100;
+    const tokenWidth = (Number(token?.width) || 1) * gridSize;
+    const tokenHeight = (Number(token?.height) || 1) * gridSize;
+    const tokenX = Number(token?.x);
+    const tokenY = Number(token?.y);
+    const markerSize = gridSize * CONCEALED_MARKER_SIZE;
+
+    if (!Number.isFinite(tokenX) || !Number.isFinite(tokenY)) {
+        throw new Error("Unable to determine the character's position for the Missed Initiative marker.");
+    }
+
+    const anchorX = tokenX + tokenWidth;
+    const anchorY = tokenY + tokenHeight;
+
+    // Move the marker outward by half its own width and height. This places
+    // its inner edge at the token's bottom-right corner instead of centering
+    // the marker on that corner (which left it touching the hex border).
+    return {
+        x: anchorX,
+        y: anchorY,
         width: markerSize,
         height: markerSize,
         elevation: (Number(token?.elevation) || 0) + 0.01
@@ -1236,18 +1308,14 @@ async function updateMissileWeaponStatusMarkerPosition(token) {
     if (markers.length === 0) return;
 
     const gridSize = Number(scene.grid?.size) || Number(canvas?.grid?.size) || 100;
-    const gap = gridSize * 0.04;
-    const tokenX = Number(tokenDocument.x) || 0;
-    const tokenY = Number(tokenDocument.y) || 0;
-    const tokenWidth = (Number(tokenDocument.width) || 1) * gridSize;
-    const tokenHeight = (Number(tokenDocument.height) || 1) * gridSize;
+    const anchor = getTokenHexBorderAnchor(tokenDocument, "bottom-left");
 
     await Promise.all(markers.map(marker => {
         const markerWidth = Number(marker.width) || gridSize * 0.5;
         const markerHeight = Number(marker.height) || gridSize * 0.5;
         return marker.update({
-            x: tokenX - markerWidth - gap,
-            y: tokenY + tokenHeight - markerHeight,
+            x: anchor.x - markerWidth / 2,
+            y: anchor.y - markerHeight / 2,
             elevation: (Number(tokenDocument.elevation) || 0) + 0.01
         });
     }));
@@ -1259,14 +1327,24 @@ async function updateMissedInitiativeMarkerPosition(token) {
     if (!tokenDocument?.uuid) return;
     const scene = tokenDocument.parent ?? canvas?.scene;
     if (!scene) return;
-    const marker = getStoredMissedInitiativeMarker(tokenDocument.uuid, scene);
-    if (!marker) return;
+
+    // Reposition every missed-initiative tile linked to this exact Token.
+    // Use the same lower-right hex-border anchor as the other status graphics;
+    // the tile's upper-left coordinates are offset by half its dimensions so
+    // the CENTER of the image, not its corner, sits on the hex border.
+    const markers = scene.tiles?.filter(tile =>
+        tile.getFlag(MODULE_ID, MISSED_INITIATIVE_MARKER_FLAG)?.tokenUuid === tokenDocument.uuid
+    ) ?? [];
+    if (markers.length === 0) return;
+
     const position = getMissedInitiativeMarkerPosition(tokenDocument);
-    await marker.update({
-        x: position.x, y: position.y,
-        width: position.width, height: position.height,
+    await Promise.all(markers.map(marker => marker.update({
+        x: position.x,
+        y: position.y,
+        width: position.width,
+        height: position.height,
         elevation: position.elevation
-    });
+    })));
 }
 
 function clearMissedInitiativeTracking() {
@@ -1401,56 +1479,28 @@ async function removeAllMissedInitiativeMarkers(
 function getConcealedMarkerPosition(token) {
 
     const gridSize =
-        canvas?.grid?.size ?? 100;
+        Number(canvas?.grid?.size ?? token?.parent?.grid?.size) || 100;
 
     const markerSize =
         gridSize * CONCEALED_MARKER_SIZE;
 
-    const gap =
-        gridSize * CONCEALED_MARKER_GAP;
-
-    /*
-     * TokenDocument.x/y are already pixel coordinates.
-     *
-     * TokenDocument.width/height are measured in grid units,
-     * so convert them to pixels before positioning the marker.
-     */
-    const tokenWidth =
-        (Number(token?.width) || 1) * gridSize;
-
-    const tokenHeight =
-        (Number(token?.height) || 1) * gridSize;
-
-    const tokenX =
-        Number(token?.x);
-
-    const tokenY =
-        Number(token?.y);
-
-    if (
-        !Number.isFinite(tokenX) ||
-        !Number.isFinite(tokenY)
-    ) {
-
-        throw new Error(
-            "Unable to determine the selected token's position."
-        );
-    }
+    const topAnchor =
+        getTokenHexBorderAnchor(token, "top");
 
     return {
 
         /*
-         * Upper-right corner of the token.
+         * Place the center of the concealed/revealed graphic on the
+         * upper border of the character's hex. Revealed graphics share
+         * this y-coordinate and remain arranged in a centered row above.
          */
         x:
-            tokenX +
-            tokenWidth +
-            gap,
+            topAnchor.x -
+            markerSize / 2,
 
         y:
-            tokenY -
-            markerSize -
-            gap,
+            topAnchor.y -
+            markerSize / 2,
 
         width:
             markerSize,
@@ -4737,125 +4787,77 @@ Hooks.on(
             return;
         }
 
+        // Foundry may animate a TokenDocument from its current coordinates to
+        // the requested destination after updateToken fires. During that
+        // animation tokenDocument.x/y can still be transient/intermediate
+        // values, while changes.x/y contain the destination. Use the requested
+        // destination for marker placement so Action Option graphics do not
+        // get stranded at an intermediate position or appear detached from the
+        // character after a mouse drag.
+        const markerPositionToken = (changes.x !== undefined || changes.y !== undefined)
+            ? Object.assign(Object.create(tokenDocument), {
+                x: changes.x !== undefined ? Number(changes.x) : tokenDocument.x,
+                y: changes.y !== undefined ? Number(changes.y) : tokenDocument.y
+            })
+            : tokenDocument;
+
         // Each Token's own Action Option markers/graphics follow it. Since
         // duplicate character Tokens receive the same movement delta, their
         // associated graphics remain attached to the appropriate Token too.
-        await updateConcealedActionMarkerPosition(tokenDocument);
-        await updateRevealedActionOptionTokenPosition(tokenDocument);
-        await updateMissedInitiativeMarkerPosition(tokenDocument);
+        // Send all graphic-position updates concurrently with the same final
+        // destination coordinates so missile-status tiles do not lag behind.
+        await Promise.all([
+            updateConcealedActionMarkerPosition(markerPositionToken),
+            updateRevealedActionOptionTokenPosition(markerPositionToken),
+            updateMissedInitiativeMarkerPosition(markerPositionToken),
+            updateMissileWeaponStatusMarkerPosition(markerPositionToken)
+        ]);
     }
 );
 
 
 /*
- * Missile weapon status indicators are independent Scene Tiles created by
- * the Set Missile Weapon Loaded Status macro. Give them their own hook so
- * a failure in any Action Option marker updater cannot prevent them moving.
+ * Missile-status tiles are updated inside the main updateToken handler above,
+ * in the same pass as Action Option graphics and using the requested final
+ * destination coordinates. Keep a Scene-ready reconciliation for existing
+ * markers in case a previous update was missed.
  */
-/*
- * Reconcile status tiles after Foundry has completed the token update.
- * Mouse dragging can emit its final document update at a different point
- * in the drag lifecycle than keyboard movement. A short deferred pass reads
- * the final TokenDocument coordinates rather than a transient drag position.
- */
-const missileStatusSyncTimers = new Map();
-
-function scheduleMissileWeaponStatusMarkerSync(token) {
-    const tokenDocument = token?.document ?? token;
-    if (!tokenDocument?.uuid) return;
-
-    const uuid = tokenDocument.uuid;
-    const previousTimer = missileStatusSyncTimers.get(uuid);
-    if (previousTimer) clearTimeout(previousTimer);
-
-    // TokenDocument coordinates can interpolate toward the requested drag
-    // destination for several hundred milliseconds after updateToken fires.
-    // Wait until the coordinates stop changing before positioning the tile.
-    const timer = setTimeout(async () => {
-        try {
-            const scene = tokenDocument.parent ?? canvas?.scene;
-            const tokenId = tokenDocument.id;
-            let lastX = null;
-            let lastY = null;
-            let stableSamples = 0;
-            const startedAt = Date.now();
-            const settleTolerance = 0.5;
-            const requiredStableSamples = 3;
-            const pollIntervalMs = 100;
-            const maxWaitMs = 5000;
-
-            while (Date.now() - startedAt < maxWaitMs) {
-                const latestToken = scene?.tokens?.get?.(tokenId) ?? tokenDocument;
-                const x = Number(latestToken.x) || 0;
-                const y = Number(latestToken.y) || 0;
-
-                if (
-                    lastX !== null &&
-                    Math.abs(x - lastX) <= settleTolerance &&
-                    Math.abs(y - lastY) <= settleTolerance
-                ) {
-                    stableSamples++;
-                } else {
-                    stableSamples = 0;
-                }
-
-                lastX = x;
-                lastY = y;
-
-                if (stableSamples >= requiredStableSamples) break;
-                await new Promise(resolve => setTimeout(resolve, pollIntervalMs));
-            }
-
-            const sceneNow = tokenDocument.parent ?? canvas?.scene;
-            const finalToken = sceneNow?.tokens?.get?.(tokenDocument.id) ?? tokenDocument;
-            await updateMissileWeaponStatusMarkerPosition(finalToken);
-        } catch (error) {
-            console.error(
-                `${MODULE_ID} | Could not reconcile missile weapon status marker after movement`,
-                { tokenUuid: uuid, error }
-            );
-        } finally {
-            missileStatusSyncTimers.delete(uuid);
-        }
-    }, 80);
-
-    missileStatusSyncTimers.set(uuid, timer);
-}
-
-Hooks.on("updateToken", (token, changes) => {
-    if (
-        changes.x === undefined &&
-        changes.y === undefined &&
-        changes.width === undefined &&
-        changes.height === undefined
-    ) return;
-
-    scheduleMissileWeaponStatusMarkerSync(token);
-});
-
 // Also reconcile existing status markers when the Scene is ready, so stale
 // positions are corrected even if a prior movement hook was missed.
 Hooks.on("canvasReady", async () => {
     const scene = canvas?.scene;
     if (!scene) return;
 
-    const markerTiles = scene.tiles?.filter(tile =>
+    const missileMarkerTiles = scene.tiles?.filter(tile =>
         Boolean(tile.getFlag(MODULE_ID, "missileWeaponStatusMarker")?.tokenUuid)
     ) ?? [];
+    const missedInitiativeTiles = scene.tiles?.filter(tile =>
+        Boolean(tile.getFlag(MODULE_ID, MISSED_INITIATIVE_MARKER_FLAG)?.tokenUuid)
+    ) ?? [];
 
-    const tokenUuids = [...new Set(markerTiles.map(tile =>
-        tile.getFlag(MODULE_ID, "missileWeaponStatusMarker")?.tokenUuid
-    ).filter(Boolean))];
+    const tokenUuids = [...new Set([
+        ...missileMarkerTiles.map(tile =>
+            tile.getFlag(MODULE_ID, "missileWeaponStatusMarker")?.tokenUuid
+        ),
+        ...missedInitiativeTiles.map(tile =>
+            tile.getFlag(MODULE_ID, MISSED_INITIATIVE_MARKER_FLAG)?.tokenUuid
+        )
+    ].filter(Boolean))];
 
     for (const tokenUuid of tokenUuids) {
         try {
             const tokenDocument = await fromUuid(tokenUuid);
-            if (tokenDocument?.parent?.id === scene.id) {
-                await updateMissileWeaponStatusMarkerPosition(tokenDocument);
-            }
+            if (tokenDocument?.parent?.id !== scene.id) continue;
+
+            // Correct existing tiles created by earlier versions as soon as
+            // the Scene loads, as well as following future Token movement.
+            await Promise.all([
+                updateMissileWeaponStatusMarkerPosition(tokenDocument),
+                updateMissedInitiativeMarkerPosition(tokenDocument)
+            ]);
         } catch (error) {
             console.error(
-                `${MODULE_ID} | Could not reconcile missile status marker on Scene ready`,
+                `${MODULE_ID} | Could not reconcile status marker on Scene ready`,
                 { tokenUuid, error }
             );
         }
